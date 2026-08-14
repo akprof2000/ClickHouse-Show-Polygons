@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MSI-инсталлятор ClickHouse Show Polygons (WiX v5).
+     Сборка: wix build -arch x64 -d AppVersion=1.0.0 -o Setup.msi installer.wxs
+     Установка per-user (без прав администратора) в %LOCALAPPDATA%\Programs,
+     чтобы config.json и secret.key рядом с exe оставались записываемыми. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="ClickHouse Show Polygons"
+           Manufacturer="akprof2000"
+           Version="$(var.AppVersion)"
+           UpgradeCode="7e2b0c71-4e8a-4d2b-9b1e-c40b91a7d210"
+           Language="1049" Codepage="65001"
+           Scope="perUser"
+           InstallerVersion="500">
+
+    <MajorUpgrade DowngradeErrorMessage="Установлена более новая версия ClickHouse Show Polygons." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ClickHouse Show Polygons">
+          <Component Id="MainExe">
+            <File Id="ChviewerExe" Source="chviewer.exe" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="SMShortcut"
+                  Name="ClickHouse Show Polygons"
+                  Description="Полигоны из ClickHouse на карте OpenStreetMap"
+                  Target="[INSTALLFOLDER]chviewer.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\akprof2000\ClickHouseShowPolygons"
+                       Name="startmenu" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut">
+        <Shortcut Id="DesktopSC"
+                  Name="ClickHouse Show Polygons"
+                  Target="[INSTALLFOLDER]chviewer.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\akprof2000\ClickHouseShowPolygons"
+                       Name="desktop" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="ClickHouse Show Polygons" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Package>
+</Wix>

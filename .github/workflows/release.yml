@@ -47,16 +47,17 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .
 
-      - name: Сборка инсталлятора (Inno Setup)
-        shell: pwsh
+      - name: Сборка MSI-инсталлятора (WiX)
         run: |
-          $ver = $env:GITHUB_REF_NAME.TrimStart('v')
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion=$ver /O. installer.iss
+          VER="${GITHUB_REF_NAME#v}"
+          dotnet tool install --global wix
+          wix build -arch x64 -d AppVersion="$VER" \
+            -o "ClickHouse-Show-Polygons-$VER.msi" installer.wxs
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:
           files: |
             chviewer.exe
-            ClickHouse-Show-Polygons-Setup-*.exe
+            ClickHouse-Show-Polygons-*.msi
           generate_release_notes: true

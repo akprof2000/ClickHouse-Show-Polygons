@@ -373,9 +373,9 @@ git tag v1.0.1 && git push origin v1.0.1
 
 В релиз попадают два файла:
 
-- **ClickHouse-Show-Polygons-Setup-X.Y.Z.exe** — инсталлятор (Inno Setup):
-  ставит программу, создаёт ярлыки в меню «Пуск» и на рабочем столе — вариант
-  для обычных пользователей;
+- **ClickHouse-Show-Polygons-X.Y.Z.msi** — инсталлятор (WiX): ставит программу
+  без прав администратора, создаёт ярлыки в меню «Пуск» и на рабочем столе —
+  вариант для обычных пользователей;
 - **chviewer.exe** — портативный вариант, работает из любой папки без установки.
 
 У exe своя иконка и версия в свойствах файла (go-winres).
@@ -386,8 +386,8 @@ flowchart LR
     W --> N["npm ci + esbuild<br/>web/dist"]
     N --> I["go-winres<br/>иконка + версия"]
     I --> G["go build<br/>-X main.version=1.0.1"]
-    G --> S["Inno Setup<br/>инсталлятор"]
-    S --> R["📦 Release<br/>Setup.exe + chviewer.exe"]
+    G --> S["WiX<br/>MSI-инсталлятор"]
+    S --> R["📦 Release<br/>.msi + chviewer.exe"]
 ```
 
 ---
