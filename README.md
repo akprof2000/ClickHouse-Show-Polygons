@@ -1,5 +1,18 @@
 # ClickHouse Show Polygons 🗺️
 
+[![build](https://github.com/akprof2000/ClickHouse-Show-Polygons/actions/workflows/ci.yml/badge.svg)](https://github.com/akprof2000/ClickHouse-Show-Polygons/actions/workflows/ci.yml)
+[![release](https://github.com/akprof2000/ClickHouse-Show-Polygons/actions/workflows/release.yml/badge.svg)](https://github.com/akprof2000/ClickHouse-Show-Polygons/actions/workflows/release.yml)
+[![последний релиз](https://img.shields.io/github/v/release/akprof2000/ClickHouse-Show-Polygons?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
+[![скачивания](https://img.shields.io/github/downloads/akprof2000/ClickHouse-Show-Polygons/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases)
+[![лицензия MIT](https://img.shields.io/github/license/akprof2000/ClickHouse-Show-Polygons?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F)](LICENSE)
+[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-25%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Windows](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Windows-0078D6?logo=windows&logoColor=white)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-8123%20%2F%208443-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com)
+[![MapLibre GL](https://img.shields.io/badge/MapLibre%20GL-WebGL-396CB2)](https://maplibre.org)
+[![H3](https://img.shields.io/badge/H3-%D0%B3%D0%B5%D0%BA%D1%81%D0%B0%D0%B3%D0%BE%D0%BD%D1%8B-1565c0)](https://github.com/akprof2000/Demo-H3-Hex)
+[![размер exe](https://img.shields.io/badge/exe-~8%20%D0%9C%D0%91%2C%20%D0%B1%D0%B5%D0%B7%20%D0%B7%D0%B0%D0%B2%D0%B8%D1%81%D0%B8%D0%BC%D0%BE%D1%81%D1%82%D0%B5%D0%B9-success)](#совсем-простой-старт)
+
 **Один exe-файл**, который показывает полигоны из базы данных ClickHouse на карте
 OpenStreetMap: скачал → запустил → ввёл адрес сервера → смотришь свои данные на карте.
 

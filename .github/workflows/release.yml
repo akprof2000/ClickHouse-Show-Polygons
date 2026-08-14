@@ -50,7 +50,7 @@ jobs:
       - name: Сборка MSI-инсталлятора (WiX)
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          dotnet tool install --global wix
+          dotnet tool install --global wix --version 5.0.2
           wix build -arch x64 -d AppVersion="$VER" \
             -o "ClickHouse-Show-Polygons-$VER.msi" installer.wxs
 
@@ -61,3 +61,16 @@ jobs:
             chviewer.exe
             ClickHouse-Show-Polygons-*.msi
           generate_release_notes: true
+
+      # храним только один релиз: все предыдущие (и их теги) удаляются
+      - name: Удаление старых релизов
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --json tagName -q '.[].tagName' |
+          while read -r tag; do
+            if [ "$tag" != "$GITHUB_REF_NAME" ]; then
+              echo "удаляю релиз $tag"
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            fi
+          done
