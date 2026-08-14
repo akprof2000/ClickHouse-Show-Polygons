@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ClickHouse Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/bundle.css">
+<style>
+  :root {
+    --accent: #1565c0;
+    --accent-dark: #0d4ea3;
+    --border: #dde1e6;
+    --muted: #5f6b7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; color: #1c2430; }
+  #map { position: absolute; inset: 0; }
+
+  #panel {
+    position: absolute; top: 12px; left: 54px; z-index: 1000;
+    background: #fff; padding: 16px 20px;
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(16,24,40,.15);
+    width: max-content;
+    max-width: calc(100vw - 80px);
+    max-height: calc(100vh - 40px); overflow: auto;
+  }
+  #panel.collapsed form { display: none; }
+  #panel.collapsed { padding: 8px 14px; }
+  .grid {
+    display: grid; grid-template-columns: 70px 200px 70px 200px;
+    gap: 10px 12px; align-items: center;
+  }
+  .grid span { color: var(--muted); white-space: nowrap; text-align: right; }
+  input[type=text], input[type=password], input[type=number], select {
+    padding: 6px 10px; border: 1px solid #c3cad3; border-radius: 6px;
+    font: inherit; width: 100%; background: #fff;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,101,192,.12); }
+  .checks { grid-column: 1 / -1; display: flex; gap: 24px; padding-top: 2px; }
+  .checks label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .checks input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  h4 { margin: 14px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #layers { display: flex; flex-direction: column; gap: 8px; }
+  .lrow {
+    display: grid; grid-template-columns: 18px 20px 34px 230px 130px auto;
+    gap: 8px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fafbfc;
+  }
+  .lrow.gridrow { grid-template-columns: 18px 34px 120px 90px 64px auto; background: #f4f8fd; }
+  .lrow .lvis { accent-color: var(--accent); width: 15px; height: 15px; justify-self: center; }
+  .lrow.gridrow .gwidth { width: 64px; }
+  .lrow .gridlabel { display: flex; align-items: center; gap: 7px; cursor: pointer; white-space: nowrap; }
+  .lrow .gridlabel input { accent-color: var(--accent); width: 15px; height: 15px; }
+  .lrow.dragover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(21,101,192,.25); }
+  .lrow.dragging { opacity: .45; }
+  .drag {
+    cursor: grab; color: #98a2b3; font-size: 15px; letter-spacing: -2px;
+    user-select: none; text-align: center;
+  }
+  .drag:hover { color: var(--accent); }
+  .lrow input[type=color] {
+    width: 34px; height: 30px; padding: 2px; border: 1px solid #c3cad3; border-radius: 6px;
+    background: #fff; cursor: pointer;
+  }
+  .lrow .ops { display: flex; gap: 4px; }
+  .lrow .ops button {
+    width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px;
+    background: #fff; color: #333; cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .lrow .ops button:hover { background: #eef4fc; border-color: var(--accent); color: var(--accent); }
+  .lhint { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  .btns { margin-top: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button {
+    padding: 7px 18px; border: none; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary { background: #757575; }
+  button.link { background: none; color: var(--accent); padding: 0; font-weight: 600; }
+  button.link:hover { background: none; text-decoration: underline; }
+
+  #search {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 1001; width: min(440px, calc(100vw - 420px));
+  }
+  #search input {
+    width: 100%; padding: 8px 34px 8px 14px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; font: inherit;
+    box-shadow: 0 2px 8px rgba(16,24,40,.15);
+  }
+  #search input:focus { outline: none; border-color: var(--accent); }
+  #searchClear {
+    position: absolute; right: 8px; top: 7px; display: none;
+    color: var(--muted) !important; font-size: 14px;
+  }
+  #searchRes {
+    display: none; margin-top: 6px; background: #fff;
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(16,24,40,.25);
+    max-height: 46vh; overflow-y: auto;
+  }
+  #searchRes.show { display: block; }
+  .sr-item {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 8px 12px; cursor: pointer; font-size: 13px;
+    border-bottom: 1px solid #eef1f5;
+  }
+  .sr-item:last-child { border-bottom: none; }
+  .sr-item:hover { background: #f2f7ff; }
+  .sr-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
+  .sr-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sr-table { color: var(--muted); font-size: 11.5px; margin-left: auto; flex: none; }
+  .sr-none { padding: 10px 14px; color: var(--muted); font-size: 13px; }
+
+  #status {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: #fff; padding: 7px 14px; border-radius: 8px;
+    border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(16,24,40,.15);
+    font-size: 13px; max-width: 360px;
+  }
+  #status.err { color: #c62828; }
+  #status .link { margin-left: 8px; font-weight: 600; font-size: 12px; }
+
+  #sqlbox {
+    position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 1100;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(16,24,40,.25); padding: 12px 16px;
+    display: none; max-height: 45%; overflow: auto;
+  }
+  #sqlbox.show { display: block; }
+  #sqlbox h3 { margin: 0 0 6px; font-size: 13px; }
+  #sqlbox pre {
+    margin: 6px 0; padding: 10px 12px; background: #f7f9fb; border-radius: 6px;
+    white-space: pre-wrap; word-break: break-all; font: 12px/1.45 Consolas, monospace;
+  }
+  #sqlbox pre.err { color: #c62828; background: #fdf3f3; }
+  #sqlbox .bar { display: flex; gap: 12px; align-items: center; }
+
+  /* окно свойств объекта (попап MapLibre) */
+  .pv-popup .maplibregl-popup-content {
+    border-radius: 10px; box-shadow: 0 4px 16px rgba(16,24,40,.25);
+    padding: 12px 14px; font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+    max-height: min(55vh, 480px); overflow-y: auto; overscroll-behavior: contain;
+  }
+  /* тонкий скроллбар, чтобы не портил карточку */
+  .pv-popup .maplibregl-popup-content::-webkit-scrollbar { width: 8px; }
+  .pv-popup .maplibregl-popup-content::-webkit-scrollbar-thumb {
+    background: #c3cad3; border-radius: 4px;
+  }
+  .pv-title { display: flex; align-items: center; gap: 7px; font-weight: 600; margin-bottom: 6px; }
+  .pv-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .pv table { border-collapse: collapse; width: 100%; }
+  .pv tr:not(:last-child) td { border-bottom: 1px solid #eef1f5; }
+  .pv td { padding: 5px 8px; vertical-align: top; }
+  .pv-key { color: var(--muted); white-space: nowrap; padding-right: 14px !important; }
+  .pv-val { word-break: break-word; color: #1c2430; }
+  .pv-num { font-variant-numeric: tabular-nums; color: #0d4ea3; }
+  .pv-bool { color: #2e7d32; font-weight: 600; }
+  .pv-empty { color: #98a2b3; }
+  .pv-json { font-family: Consolas, monospace; font-size: 12px; color: #6b21a8; }
+  .pv-none { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="panel">
+  <form id="f">
+    <div class="grid">
+      <span>Сервер</span><input type="text" id="f_url" placeholder="IP или host">
+      <span>Логин</span><input type="text" id="f_user" value="default">
+      <span>Пароль</span><input type="password" id="f_pass">
+      <span></span><span></span>
+      <div class="checks">
+        <label><input type="checkbox" id="f_ssl" checked> SSL (https, порт 8443)</label>
+        <label><input type="checkbox" id="f_insecure" checked> не проверять сертификат</label>
+      </div>
+    </div>
+
+    <h4>Слои (первый — верхний)</h4>
+    <div id="layers"></div>
+    <div class="lhint">У каждого слоя: цвет, таблица и её столбец с полигонами; порядок — перетаскиванием или ↑/↓. Сетка H3 включается галочкой.</div>
+    <div class="btns" style="margin-top:8px">
+      <button type="button" class="link" id="addLayer">+ добавить слой</button>
+    </div>
+
+    <div class="btns">
+      <button type="submit">Подключиться</button>
+      <button type="button" class="secondary" id="saveBtn">Сохранить настройки</button>
+      <button type="button" class="link" id="hideBtn">свернуть</button>
+      <span id="msg"></span>
+    </div>
+  </form>
+  <button type="button" class="link" id="showBtn" style="display:none">настройки</button>
+</div>
+
+<div id="search">
+  <input type="text" id="searchInput" placeholder="Поиск по всем полям видимых слоёв…" autocomplete="off">
+  <button type="button" class="link" id="searchClear" title="очистить">✕</button>
+  <div id="searchRes"></div>
+</div>
+
+<div id="status"><span id="statustext">Укажите параметры и нажмите «Подключиться»</span><button type="button" class="link" id="showSql" style="display:none">SQL</button></div>
+
+<div id="sqlbox">
+  <h3>Последний запрос к ClickHouse</h3>
+  <pre id="sqltext"></pre>
+  <pre id="sqlerr" class="err" style="display:none"></pre>
+  <div class="bar">
+    <button type="button" id="copySql">Скопировать SQL</button>
+    <button type="button" class="link" id="closeSql">закрыть</button>
+  </div>
+</div>
+
+<script src="/bundle.js"></script>
+</body>
+</html>

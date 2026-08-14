@@ -1,0 +1,18 @@
+# сборка
+chviewer.exe
+web/dist/
+web/node_modules/
+
+# локальные настройки пользователя (содержит зашифрованный пароль)
+config.json
+secret.key
+
+# ресурсы Windows генерируются go-winres при сборке
+*.syso
+
+# ключи тестового стенда генерируются локально
+testenv/server.key
+testenv/server.crt
+
+# временное
+*.log

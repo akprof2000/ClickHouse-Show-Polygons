@@ -1,0 +1,539 @@
+<title>ClickHouse Viewer — как всё устроено</title>
+<style>
+  :root {
+    --bg: #fbfcfd;
+    --surface: #ffffff;
+    --ink: #1a2332;
+    --muted: #5b6878;
+    --border: #dbe2ea;
+    --accent: #1565c0;
+    --accent-soft: #e8f0fb;
+    --code-bg: #f3f6f9;
+    --good: #2e7d32;
+    --warn: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10151c;
+      --surface: #171e27;
+      --ink: #e4eaf1;
+      --muted: #93a1b3;
+      --border: #2a3441;
+      --accent: #5b9be8;
+      --accent-soft: #1b2a3e;
+      --code-bg: #1c242f;
+      --good: #66bb6a;
+      --warn: #ef7070;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151c;
+    --surface: #171e27;
+    --ink: #e4eaf1;
+    --muted: #93a1b3;
+    --border: #2a3441;
+    --accent: #5b9be8;
+    --accent-soft: #1b2a3e;
+    --code-bg: #1c242f;
+    --good: #66bb6a;
+    --warn: #ef7070;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.65 "Segoe UI", system-ui, sans-serif;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px 96px; }
+
+  header.doc {
+    border-bottom: 1px solid var(--border);
+    padding: 40px 0 28px; margin-bottom: 8px;
+  }
+  .eyebrow {
+    font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  h1 { font-size: 32px; line-height: 1.2; margin: 8px 0 10px; text-wrap: balance; }
+  .lede { color: var(--muted); margin: 0; }
+
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+    padding: 14px 0; border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+  }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  h2 {
+    font-size: 22px; margin: 52px 0 12px; padding-top: 8px;
+    text-wrap: balance;
+  }
+  h2 .num { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  h3 { font-size: 16.5px; margin: 28px 0 8px; }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 4px 0; }
+  strong { font-weight: 600; }
+
+  code {
+    font: 13px/1.5 Consolas, "Cascadia Mono", monospace;
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 1px 6px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 18px; overflow-x: auto;
+    font: 13px/1.55 Consolas, "Cascadia Mono", monospace;
+  }
+  pre code { background: none; border: none; padding: 0; }
+
+  figure { margin: 22px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .figbox {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; overflow-x: auto;
+  }
+
+  table.spec {
+    border-collapse: collapse; width: 100%; font-size: 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  }
+  table.spec th, table.spec td { padding: 8px 14px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.spec th { font-size: 12.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  table.spec tr:last-child td { border-bottom: none; }
+  table.spec td:first-child { white-space: nowrap; }
+  .tablewrap { overflow-x: auto; margin: 14px 0; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 8px 8px 0; padding: 12px 18px; margin: 16px 0;
+    font-size: 14px;
+  }
+  .callout.warn { border-left-color: var(--warn); }
+
+  .num-col { font-variant-numeric: tabular-nums; }
+  .ok { color: var(--good); font-weight: 600; }
+</style>
+
+<div class="wrap">
+<header class="doc">
+  <div class="eyebrow">Техническая документация</div>
+  <h1>ClickHouse Viewer: полигоны и сетка H3 на карте</h1>
+  <p class="lede">Один exe-файл под Windows поднимает локальный сервер, открывает браузер
+  и рисует мультиполигоны из любых таблиц ClickHouse на карте OpenStreetMap — на GPU,
+  с кэшем на бэке, фильтром детализации и сеткой гексагонов H3.</p>
+</header>
+
+<nav class="toc">
+  <a href="#arch">Архитектура</a>
+  <a href="#usage">Запуск и настройка</a>
+  <a href="#layers">Слои</a>
+  <a href="#flow">Загрузка данных</a>
+  <a href="#cache">Кэш территорий</a>
+  <a href="#detail">Фильтр детализации</a>
+  <a href="#h3">Сетка H3</a>
+  <a href="#hover">Наведение и клики</a>
+  <a href="#security">Шифрование пароля</a>
+  <a href="#debug">Отладка</a>
+  <a href="#build">Сборка и тесты</a>
+</nav>
+
+<h2 id="arch"><span class="num">1</span>Архитектура</h2>
+<p>Приложение состоит из двух частей, упакованных в один файл <code>chviewer.exe</code>
+(Go, ~8 МБ, статическая сборка): микро-бэкенда и веб-страницы, вшитой в бинарник.
+Бэкенд слушает только <code>127.0.0.1:8137</code> и выполняет три роли:
+отдаёт страницу, хранит настройки в <code>config.json</code> рядом с exe
+и проксирует запросы к ClickHouse.</p>
+
+<figure>
+  <div class="figbox">
+  <svg viewBox="0 0 820 340" role="img" aria-label="Архитектура: браузер общается с chviewer.exe по локальному HTTP, exe ходит в ClickHouse по http или https и хранит config.json; тайлы карты браузер берёт с OpenStreetMap напрямую">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <g fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="20" y="60" width="200" height="150" rx="10"/>
+      <rect x="320" y="60" width="200" height="150" rx="10"/>
+      <rect x="630" y="60" width="170" height="150" rx="10"/>
+      <rect x="345" y="250" width="150" height="52" rx="8" stroke-dasharray="5 4"/>
+      <rect x="45" y="250" width="150" height="52" rx="8" stroke-dasharray="5 4"/>
+    </g>
+    <g font-size="14" font-weight="600" fill="currentColor" text-anchor="middle">
+      <text x="120" y="88">Браузер</text>
+      <text x="420" y="88">chviewer.exe</text>
+      <text x="715" y="88">ClickHouse</text>
+    </g>
+    <g font-size="12" fill="currentColor" text-anchor="middle" opacity="0.75">
+      <text x="120" y="112">MapLibre GL (WebGL)</text>
+      <text x="120" y="130">слои полигонов</text>
+      <text x="120" y="148">сетка H3</text>
+      <text x="120" y="166">шифрование пароля</text>
+      <text x="420" y="112">HTTP-сервер 127.0.0.1</text>
+      <text x="420" y="130">/api/objects — кэш</text>
+      <text x="420" y="148">/api/query — прокси SQL</text>
+      <text x="420" y="166">/api/config — настройки</text>
+      <text x="715" y="112">HTTP 8123</text>
+      <text x="715" y="130">HTTPS 8443</text>
+      <text x="715" y="152">таблицы с</text>
+      <text x="715" y="168">MultiPolygon</text>
+      <text x="420" y="282">config.json</text>
+      <text x="420" y="296">рядом с exe</text>
+      <text x="120" y="282">tile.openstreetmap.org</text>
+      <text x="120" y="296">подложка карты</text>
+    </g>
+    <g stroke="currentColor" stroke-width="1.4" fill="none">
+      <line x1="220" y1="120" x2="318" y2="120" marker-end="url(#ar)"/>
+      <line x1="318" y1="150" x2="220" y2="150" marker-end="url(#ar)"/>
+      <line x1="520" y1="120" x2="628" y2="120" marker-end="url(#ar)"/>
+      <line x1="628" y1="150" x2="520" y2="150" marker-end="url(#ar)"/>
+      <line x1="420" y1="210" x2="420" y2="248" marker-end="url(#ar)"/>
+      <line x1="120" y1="210" x2="120" y2="248" marker-end="url(#ar)"/>
+    </g>
+    <g font-size="11.5" fill="currentColor" opacity="0.8">
+      <text x="228" y="110">bbox + фильтры</text>
+      <text x="240" y="168">GeoJSON</text>
+      <text x="533" y="110">SQL (FORMAT JSON)</text>
+      <text x="548" y="168">строки + типы</text>
+      <text x="430" y="235">читает / пишет</text>
+      <text x="130" y="235">тайлы</text>
+    </g>
+  </svg>
+  </div>
+  <figcaption>Браузер никогда не ходит в ClickHouse напрямую — все запросы идут через exe.
+  Поэтому нет проблем CORS, а самоподписанный сертификат сервер проверяет (или осознанно
+  игнорирует) на стороне Go, где это управляемо.</figcaption>
+</figure>
+
+<p>Такое разделение решает три проблемы, которые убивают вариант «просто HTML-страница»:</p>
+<ul>
+  <li><strong>CORS</strong> — браузер запрещает запросы к другому хосту; локальный прокси снимает это полностью;</li>
+  <li><strong>самоподписанный SSL</strong> — браузер молча блокирует такой сертификат, а Go-клиент умеет <code>InsecureSkipVerify</code> по галочке «не проверять сертификат»;</li>
+  <li><strong>кэш</strong> — повторные заходы в уже просмотренную область не порождают запросов к БД вообще.</li>
+</ul>
+
+<h2 id="usage"><span class="num">2</span>Запуск и настройка</h2>
+<ol>
+  <li>Запустите <code>chviewer.exe</code> — поднимется сервер и откроется браузер
+  (флаг <code>-nobrowser</code> отключает автоматическое открытие).</li>
+  <li>В панели укажите <strong>Сервер</strong> — достаточно IP или имени хоста:
+  протокол и порт подставятся из галочки SSL (<code>https://…:8443</code> или <code>http://…:8123</code>);
+  явно указанные протокол/порт не перезаписываются.</li>
+  <li>Логин и пароль ClickHouse, список слоёв — и «Подключиться».</li>
+  <li>«Сохранить настройки» пишет всё в <code>config.json</code>; при следующем запуске
+  страница сама восстановит слои и подключится.</li>
+</ol>
+
+<div class="tablewrap"><table class="spec">
+  <tr><th>Элемент панели</th><th>Что делает</th></tr>
+  <tr><td>SSL (https, порт 8443)</td><td>Переключает протокол и порт по умолчанию для поля «Сервер».</td></tr>
+  <tr><td>Не проверять сертификат</td><td>Разрешает самоподписанный сертификат ClickHouse (проверку пропускает exe, не браузер).</td></tr>
+  <tr><td>Подключиться</td><td>Читает структуру каждой таблицы (<code>DESCRIBE TABLE</code>), сбрасывает кэш и загружает видимую область.</td></tr>
+  <tr><td>Сохранить настройки</td><td>Пишет конфиг на диск. Кнопка синеет при несохранённых изменениях и сереет после записи.</td></tr>
+  <tr><td>Свернуть / настройки</td><td>Прячет панель в компактную кнопку и возвращает обратно.</td></tr>
+  <tr><td>Статус (справа сверху)</td><td>Счётчик объектов, признак «из кэша», ссылка SQL — последний запрос к БД.</td></tr>
+</table></div>
+
+<h2 id="layers"><span class="num">3</span>Слои</h2>
+<p>Слой — это таблица ClickHouse с колонкой типа <code>MultiPolygon</code>. Структура таблицы
+не фиксирована: при подключении выполняется <code>DESCRIBE TABLE</code>, и все остальные
+колонки автоматически становятся атрибутами объекта (их показывает попап). У каждого слоя:</p>
+<ul>
+  <li><strong>галочка видимости</strong> — скрытый слой не рисуется и, главное, не запрашивается из БД;</li>
+  <li><strong>цвет</strong> — выбирается автоматически из палитры, меняется кликом по квадратику;</li>
+  <li><strong>таблица</strong> и <strong>имя колонки с полигонами</strong>;</li>
+  <li><strong>порядок</strong> — перетаскивание за ручку слева или стрелки ↑/↓; первый в списке — верхний на карте.</li>
+</ul>
+<p>Сетка H3 — тоже слой: участвует в том же списке и в том же порядке, но вместо таблицы
+у неё разрешение (авто или 5–11), толщина линий и цвет.</p>
+
+<h2 id="flow"><span class="num">4</span>Загрузка данных: только то, что видно</h2>
+<p>Главный принцип: <strong>из БД читается только видимая область</strong>, и только объекты,
+различимые на текущем масштабе. При каждом сдвиге или зуме карты (после паузы 300 мс,
+чтобы не стрелять на каждое движение) фронтенд шлёт на exe запрос
+<code>/api/objects</code> с рамкой экрана.</p>
+
+<figure>
+  <div class="figbox">
+  <svg viewBox="0 0 820 470" role="img" aria-label="Блок-схема обработки запроса /api/objects: проверка покрытия кэшем, при непокрытии — SQL к ClickHouse с исключением территорий и фильтром размера, пополнение кэша, ответ объектами из кэша, пересекающими экран">
+    <defs>
+      <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <g fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="300" y="16" width="220" height="44" rx="8"/>
+      <path d="M410 96 L540 141 L410 186 L280 141 Z"/>
+      <rect x="60" y="226" width="240" height="88" rx="8"/>
+      <rect x="520" y="226" width="240" height="88" rx="8" stroke="#1565c0" stroke-width="2"/>
+      <rect x="300" y="360" width="220" height="60" rx="8"/>
+    </g>
+    <g font-size="13" fill="currentColor" text-anchor="middle">
+      <text x="410" y="36" font-weight="600">Запрос: bbox экрана,</text>
+      <text x="410" y="52">min_deg, лимит 30 000</text>
+      <text x="410" y="132" font-weight="600">Экран покрыт кэшем</text>
+      <text x="410" y="150">с нужной детализацией?</text>
+      <text x="180" y="250" font-weight="600">Да — БД не трогаем</text>
+      <text x="180" y="272">объекты берутся</text>
+      <text x="180" y="290">из памяти exe</text>
+      <text x="640" y="250" font-weight="600">Нет — SQL к ClickHouse</text>
+      <text x="640" y="272">bbox + запас 30 %</text>
+      <text x="640" y="290">минус покрытые территории</text>
+      <text x="640" y="306">минус мелкие объекты</text>
+      <text x="410" y="384" font-weight="600">Ответ фронтенду</text>
+      <text x="410" y="402">объекты из кэша, пересекающие экран</text>
+    </g>
+    <g stroke="currentColor" stroke-width="1.4" fill="none">
+      <line x1="410" y1="60" x2="410" y2="94" marker-end="url(#ar2)"/>
+      <path d="M280 141 L180 141 L180 224" marker-end="url(#ar2)"/>
+      <path d="M540 141 L640 141 L640 224" marker-end="url(#ar2)"/>
+      <path d="M180 314 L180 390 L298 390" marker-end="url(#ar2)"/>
+      <path d="M640 314 L640 390 L522 390" marker-end="url(#ar2)"/>
+    </g>
+    <g font-size="12" fill="currentColor" opacity="0.8">
+      <text x="220" y="132">да</text>
+      <text x="585" y="132">нет</text>
+      <text x="652" y="342">новые объекты и территория</text>
+      <text x="652" y="358">добавляются в кэш</text>
+    </g>
+  </svg>
+  </div>
+  <figcaption>Каждый запрос либо целиком обслуживается кэшем exe, либо дозапрашивает
+  из ClickHouse только то, чего в кэше ещё нет. Ответ в обоих случаях один и тот же —
+  объекты, пересекающие экран.</figcaption>
+</figure>
+
+<p>Границы объекта считаются прямо в SQL из координат мультиполигона —
+работает на любой таблице без предварительной подготовки:</p>
+<pre><code>WITH flatten(flatten(`key`)) AS pts,
+     arrayMap(p -&gt; p.1, pts) AS xs,
+     arrayMap(p -&gt; p.2, pts) AS ys
+SELECT *, cityHash64(toString(`key`)) AS __id
+FROM emr_ch.tbl_polygons_bmt
+WHERE arrayMin(xs) &lt;= 37.9 AND arrayMax(xs) &gt;= 37.4     -- пересечение с экраном
+  AND arrayMin(ys) &lt;= 56.0 AND arrayMax(ys) &gt;= 55.6
+  AND NOT (…)                                            -- минус покрытые территории
+  AND (arrayMax(xs)-arrayMin(xs) &gt;= 0.0012 OR …)         -- минус слишком мелкие
+LIMIT 30000
+FORMAT JSON</code></pre>
+
+<div class="callout">Координаты <code>MultiPolygon</code> в <code>FORMAT JSON</code> приходят
+готовыми вложенными массивами <code>[долгота, широта]</code> — они без преобразований
+подставляются в GeoJSON. Идентификатором объекта служит <code>cityHash64</code> от геометрии,
+поэтому таблице не нужна колонка-ключ.</div>
+
+<h2 id="cache"><span class="num">5</span>Кэш территорий на бэке</h2>
+<p>Кэш живёт в памяти exe отдельно для каждого слоя (ключ —
+сервер + пользователь + таблица + колонка). Хранятся две вещи:</p>
+<ul>
+  <li><strong>объекты</strong> — по хэшу геометрии, с посчитанным bbox;</li>
+  <li><strong>покрытые территории</strong> — прямоугольники, для которых выборка была полной
+  (лимит не отрезал хвост), вместе с уровнем детализации, на котором их грузили.</li>
+</ul>
+<p>Исключение уже загруженного из повторных запросов делается <strong>территориями, а не
+списками идентификаторов</strong>: в SQL добавляется по одному условию
+<code>AND NOT (объект пересекает прямоугольник)</code> на каждую покрытую область
+(их не больше 64), а не <code>NOT IN</code> с тысячами значений. Это корректно, потому что
+объект, пересекающий полностью загруженную область, гарантированно уже в кэше.</p>
+<p>Запрос к БД идёт с запасом +30 % вокруг экрана — мелкие сдвиги карты вообще не
+порождают обращений. Кнопка «Подключиться» сбрасывает кэш.</p>
+
+<h2 id="detail"><span class="num">6</span>Фильтр детализации: мелкое не грузим</h2>
+<p>Тысячи «домиков» размером меньше пикселя не имеют смысла на обзорном масштабе — они
+только перегружают сеть и рендер. Фронтенд считает, сколько градусов занимают
+<strong>3 пикселя</strong> на текущем зуме, и передаёт это число (<code>min_deg</code>)
+с каждым запросом. Бэкенд добавляет в SQL условие «ширина или высота объекта не меньше
+порога» — мелочь не читается из БД вовсе.</p>
+
+<figure>
+  <div class="figbox">
+  <svg viewBox="0 0 820 240" role="img" aria-label="Сравнение: на обзорном зуме грузятся только крупные объекты, при приближении порог уменьшается и мелкие объекты догружаются">
+    <defs>
+      <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <g fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="40" y="40" width="300" height="160" rx="8"/>
+      <rect x="480" y="40" width="300" height="160" rx="8"/>
+    </g>
+    <g font-size="13" font-weight="600" fill="currentColor">
+      <text x="40" y="28">Обзорный зум: порог крупный</text>
+      <text x="480" y="28">Приблизили: порог уменьшился</text>
+    </g>
+    <g fill="#1565c0" opacity="0.55">
+      <rect x="70" y="70" width="60" height="44" rx="2"/>
+      <rect x="200" y="120" width="80" height="52" rx="2"/>
+      <rect x="510" y="60" width="90" height="70" rx="2"/>
+      <rect x="660" y="130" width="70" height="46" rx="2"/>
+    </g>
+    <g fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3" opacity="0.5">
+      <rect x="160" y="80" width="8" height="7"/>
+      <rect x="255" y="70" width="10" height="8"/>
+      <rect x="100" y="150" width="7" height="7"/>
+    </g>
+    <g fill="#1565c0" opacity="0.55">
+      <rect x="620" y="70" width="18" height="16" rx="1"/>
+      <rect x="560" y="160" width="22" height="18" rx="1"/>
+      <rect x="700" y="80" width="16" height="15" rx="1"/>
+    </g>
+    <g font-size="12" fill="currentColor" opacity="0.8">
+      <text x="70" y="190">пунктир — не загружено (&lt; 3 px)</text>
+      <text x="510" y="190">та же мелочь догрузилась</text>
+    </g>
+    <line x1="350" y1="120" x2="470" y2="120" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+    <text x="368" y="110" font-size="12" fill="currentColor">зум +</text>
+  </svg>
+  </div>
+  <figcaption>Порог зависит от масштаба: при приближении «3 пикселя» становятся меньше
+  в градусах, и объекты, отфильтрованные раньше, автоматически докачиваются.</figcaption>
+</figure>
+
+<p>Чтобы это дружило с кэшем, каждая покрытая территория помнит детализацию, с которой её
+грузили. Область, покрытая «грубо», не считается покрытой для более детального запроса —
+поэтому при приближении мелкие объекты честно дочитываются из БД, а повторный просмотр
+на том же зуме идёт из кэша.</p>
+
+<h2 id="h3"><span class="num">7</span>Сетка H3</h2>
+<p>Слой сетки использует компонент <code>react-h3-map</code> (без React-обёртки — напрямую
+его WebGL-слой <code>H3GridLayer</code> и модуль геометрии). Ячейки не приходят из БД —
+они вычисляются из рамки экрана функцией <code>polygonToCells</code>, вся сетка рисуется
+одним draw call.</p>
+<ul>
+  <li><strong>Разрешение</strong> — «авто» (подбирается по зуму так, чтобы ребро было ~40 px)
+  или фиксированное 5–11. Пункты, дающие больше 60 000 ячеек на текущем масштабе,
+  автоматически гаснут с пометкой «приблизьте карту» и обновляются при каждом движении.</li>
+  <li><strong>Предохранитель</strong> — прежде чем строить сетку, дешёвой арифметикой
+  оценивается число ячеек; выше лимита сетка не строится (иначе вкладка зависла бы на минуты).</li>
+  <li><strong>Клик по ячейке</strong> показывает индекс в двух видах: hex
+  (<code>8711aa636ffffff</code>) и int64 (<code>608296725861367807</code>) — второй удобен
+  для join-ов в ClickHouse, где H3-индексы обычно лежат как <code>UInt64</code>.</li>
+  <li><strong>Ячейка под курсором</strong> подсвечивается янтарным контуром; определяется
+  за O(1) через <code>latLngToCell</code> — без пикинг-рендера.</li>
+</ul>
+
+<h2 id="hover"><span class="num">8</span>Наведение и клики: верхний объект побеждает</h2>
+<p>И подсветка, и попап работают по одному правилу: <strong>реагирует самый верхний объект
+под курсором</strong> с учётом порядка слоёв в панели.</p>
+
+<figure>
+  <div class="figbox">
+  <svg viewBox="0 0 820 210" role="img" aria-label="Порядок слоёв сверху вниз: полигоны выше сетки перехватывают наведение, сетка реагирует только там, где выше неё ничего нет">
+    <g fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="60" y="30" width="290" height="40" rx="8"/>
+      <rect x="60" y="86" width="290" height="40" rx="8"/>
+      <rect x="60" y="142" width="290" height="40" rx="8"/>
+    </g>
+    <g font-size="13" fill="currentColor">
+      <text x="80" y="55" font-weight="600">1. tbl_polygons_bmt</text>
+      <text x="80" y="111" font-weight="600">2. Сетка H3</text>
+      <text x="80" y="167" font-weight="600">3. tbl_zones</text>
+    </g>
+    <g font-size="12.5" fill="currentColor" opacity="0.8">
+      <text x="420" y="48">курсор над синим полигоном →</text>
+      <text x="420" y="64">подсвечивается полигон, гексагон гаснет</text>
+      <text x="420" y="104">курсор над пустым местом или над зоной →</text>
+      <text x="420" y="120">подсвечивается гексагон (зоны ниже сетки)</text>
+      <text x="420" y="160">чтобы зоны перехватывали наведение,</text>
+      <text x="420" y="176">перетащите их выше сетки</text>
+    </g>
+    <text x="30" y="55" font-size="11" fill="currentColor" opacity="0.6">верх</text>
+    <text x="30" y="167" font-size="11" fill="currentColor" opacity="0.6">низ</text>
+  </svg>
+  </div>
+  <figcaption>Сетка «есть» в каждой точке экрана, поэтому сравниваются позиции слоёв:
+  полигон выигрывает у гексагона, только если его слой стоит выше сетки.</figcaption>
+</figure>
+
+<p>Попап объекта показывает все колонки таблицы, кроме геометрии: числа с разделителями
+разрядов, булевы — «да/нет», пустые — прочерк, вложенные структуры — моноширинным.
+Высота попапа ограничена половиной экрана: если полей много, внутри появляется прокрутка,
+за край окна он не вылезает. Подсветка полигонов сделана через feature-state MapLibre —
+состояние меняется на GPU без перестроения геометрии.</p>
+
+<h2 id="security"><span class="num">9</span>Шифрование пароля</h2>
+<p>Пароль ClickHouse нигде не хранится открытым текстом. В <code>config.json</code>
+попадает только шифртекст, а ключ выводится из отпечатка браузера — на другой машине
+или в другом браузере файл бесполезен, страница попросит ввести пароль заново.</p>
+
+<figure>
+  <div class="figbox">
+  <svg viewBox="0 0 820 230" role="img" aria-label="Схема шифрования: отпечаток браузера через PBKDF2 с солью даёт ключ AES-256-GCM, которым пароль шифруется перед записью в config.json; расшифровка возможна только в том же браузере">
+    <defs>
+      <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+    <g fill="none" stroke="currentColor" stroke-width="1.4">
+      <rect x="30" y="40" width="190" height="64" rx="8"/>
+      <rect x="30" y="140" width="190" height="50" rx="8"/>
+      <rect x="300" y="88" width="190" height="56" rx="8"/>
+      <rect x="580" y="88" width="210" height="56" rx="8"/>
+    </g>
+    <g font-size="13" fill="currentColor" text-anchor="middle">
+      <text x="125" y="64" font-weight="600">Отпечаток браузера</text>
+      <text x="125" y="82" font-size="11.5" opacity="0.75">userAgent, экран, язык,</text>
+      <text x="125" y="96" font-size="11.5" opacity="0.75">ядра CPU, часовой пояс</text>
+      <text x="125" y="163" font-weight="600">Пароль</text>
+      <text x="125" y="180" font-size="11.5" opacity="0.75">вводится в форме</text>
+      <text x="395" y="110" font-weight="600">PBKDF2 · 100 000</text>
+      <text x="395" y="128" font-size="11.5" opacity="0.75">+ случайная соль → ключ AES</text>
+      <text x="685" y="110" font-weight="600">AES-256-GCM</text>
+      <text x="685" y="128" font-size="11.5" opacity="0.75">соль.iv.шифртекст → config.json</text>
+    </g>
+    <g stroke="currentColor" stroke-width="1.4" fill="none">
+      <line x1="220" y1="72" x2="298" y2="105" marker-end="url(#ar4)"/>
+      <line x1="220" y1="165" x2="298" y2="130" marker-end="url(#ar4)"/>
+      <line x1="490" y1="116" x2="578" y2="116" marker-end="url(#ar4)"/>
+    </g>
+    <text x="410" y="200" font-size="12" fill="currentColor" opacity="0.8" text-anchor="middle">расшифровка — тот же путь в обратную сторону; в другом браузере отпечаток другой → ключ не совпадёт</text>
+  </svg>
+  </div>
+  <figcaption>Шифрование выполняется в браузере через WebCrypto; exe видит только
+  готовый шифртекст. Пароль в открытом виде существует лишь в памяти вкладки
+  и в заголовке запроса к ClickHouse.</figcaption>
+</figure>
+
+<div class="callout warn">В лог пароль не попадает никогда. Но помните: пользователь
+ClickHouse для просмотрщика лучше заводить read-only с доступом только к нужным таблицам.</div>
+
+<h2 id="debug"><span class="num">10</span>Отладка</h2>
+<ul>
+  <li><strong>Консоль exe</strong> — развёрнутый лог: каждый запрос (адрес, пользователь,
+  SSL, полный SQL), результат (<code>HTTP 200, 89246 байт за 23ms</code>), состояние кэша,
+  полные тексты ошибок ClickHouse.</li>
+  <li><strong>Ссылка SQL</strong> в статусе — последний запрос в том виде, в каком он ушёл
+  на сервер; кнопка «Скопировать SQL» позволяет выполнить его напрямую в clickhouse-client.</li>
+  <li><strong>При ошибке</strong> окно с SQL открывается само и показывает полный текст
+  ошибки сервера рядом с запросом.</li>
+</ul>
+
+<h2 id="build"><span class="num">11</span>Сборка и тесты</h2>
+<div class="tablewrap"><table class="spec">
+  <tr><th>Что</th><th>Где</th></tr>
+  <tr><td>Бэкенд</td><td><code>main.go</code> — сервер, прокси, кэш территорий</td></tr>
+  <tr><td>Фронтенд</td><td><code>web/app.js</code> + <code>web/index.html</code> — карта, слои, панель</td></tr>
+  <tr><td>Компонент H3</td><td><code>C:\Projects\Demo-H3-Hex</code> — импортируется исходниками, без React</td></tr>
+  <tr><td>Автотесты</td><td><code>test.sh</code> — 21 проверка: http/https, кэш, bbox, кириллица, ошибки</td></tr>
+</table></div>
+
+<pre><code># пересборка фронтенда (после правок web/)
+cd chviewer/web
+npm run build            # esbuild → dist/bundle.js + bundle.css
+
+# пересборка exe (dist/ вшивается через go:embed)
+cd chviewer
+go build -ldflags="-s -w" -o chviewer.exe .
+
+# полный прогон автотестов (нужен Docker-стенд ClickHouse)
+bash test.sh</code></pre>
+
+<p>Тестовый стенд: контейнер <code>ch-test</code> с ClickHouse, порты 8123 (http)
+и 8443 (https, самоподписанный сертификат), пользователь <code>default</code> /
+<code>test123</code>, таблицы <code>emr_ch.tbl_polygons_bmt</code> (200 полигонов)
+и <code>emr_ch.tbl_zones</code> (80 полигонов, другая структура колонок).
+Итог последнего прогона: <span class="ok">21 из 21</span>.</p>
+
+</div>

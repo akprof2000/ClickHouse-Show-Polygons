@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ClickHouse Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --accent: #1565c0;
+    --accent-dark: #0d4ea3;
+    --border: #dde1e6;
+    --muted: #5f6b7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font: 14px/1.5 "Segoe UI", system-ui, sans-serif; color: #1c2430; }
+  #map { position: absolute; inset: 0; }
+
+  #panel {
+    position: absolute; top: 12px; left: 54px; z-index: 1000;
+    background: #fff; padding: 16px 20px;
+    border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(16,24,40,.15);
+    width: max-content;
+    max-width: calc(100vw - 80px);
+    max-height: calc(100vh - 40px); overflow: auto;
+  }
+  #panel.collapsed form { display: none; }
+  #panel.collapsed { padding: 8px 14px; }
+  .grid {
+    display: grid; grid-template-columns: 70px 200px 70px 200px;
+    gap: 10px 12px; align-items: center;
+  }
+  .grid span { color: var(--muted); white-space: nowrap; text-align: right; }
+  input[type=text], input[type=password], input[type=number] {
+    padding: 6px 10px; border: 1px solid #c3cad3; border-radius: 6px;
+    font: inherit; width: 100%; background: #fff;
+  }
+  input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(21,101,192,.12); }
+  .checks { grid-column: 1 / -1; display: flex; gap: 24px; padding-top: 2px; }
+  .checks label { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+  .checks input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  h4 { margin: 14px 0 8px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #layers { display: flex; flex-direction: column; gap: 8px; }
+  .lrow {
+    display: grid; grid-template-columns: 18px 34px 230px 130px auto;
+    gap: 8px; align-items: center;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fafbfc;
+  }
+  .lrow.dragover { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(21,101,192,.25); }
+  .lrow.dragging { opacity: .45; }
+  .drag {
+    cursor: grab; color: #98a2b3; font-size: 15px; letter-spacing: -2px;
+    user-select: none; text-align: center;
+  }
+  .drag:hover { color: var(--accent); }
+  .lrow input[type=color] {
+    width: 34px; height: 30px; padding: 2px; border: 1px solid #c3cad3; border-radius: 6px;
+    background: #fff; cursor: pointer;
+  }
+  .lrow .ops { display: flex; gap: 4px; }
+  .lrow .ops button {
+    width: 28px; height: 28px; padding: 0; border: 1px solid var(--border); border-radius: 6px;
+    background: #fff; color: #333; cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .lrow .ops button:hover { background: #eef4fc; border-color: var(--accent); color: var(--accent); }
+  .lhint { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  .btns { margin-top: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  button {
+    padding: 7px 18px; border: none; border-radius: 6px; cursor: pointer;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 600;
+  }
+  button:hover { background: var(--accent-dark); }
+  button.secondary { background: #757575; }
+  button.link { background: none; color: var(--accent); padding: 0; font-weight: 600; }
+  button.link:hover { background: none; text-decoration: underline; }
+
+  #status {
+    position: absolute; top: 12px; right: 12px; z-index: 1000;
+    background: #fff; padding: 7px 14px; border-radius: 8px;
+    border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(16,24,40,.15);
+    font-size: 13px; max-width: 360px;
+  }
+  #status.err { color: #c62828; }
+  #status .link { margin-left: 8px; font-weight: 600; font-size: 12px; }
+
+  #sqlbox {
+    position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 1100;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(16,24,40,.25); padding: 12px 16px;
+    display: none; max-height: 45%; overflow: auto;
+  }
+  #sqlbox.show { display: block; }
+  #sqlbox h3 { margin: 0 0 6px; font-size: 13px; }
+  #sqlbox pre {
+    margin: 6px 0; padding: 10px 12px; background: #f7f9fb; border-radius: 6px;
+    white-space: pre-wrap; word-break: break-all; font: 12px/1.45 Consolas, monospace;
+  }
+  #sqlbox pre.err { color: #c62828; background: #fdf3f3; }
+  #sqlbox .bar { display: flex; gap: 12px; align-items: center; }
+
+  /* окно свойств объекта */
+  .pv-popup .leaflet-popup-content-wrapper {
+    border-radius: 10px; box-shadow: 0 4px 16px rgba(16,24,40,.25); padding: 4px;
+  }
+  .pv-popup .leaflet-popup-content { margin: 8px 10px; font: 13px/1.5 "Segoe UI", system-ui, sans-serif; }
+  .pv-title { display: flex; align-items: center; gap: 7px; font-weight: 600; margin-bottom: 6px; }
+  .pv-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .pv table { border-collapse: collapse; width: 100%; }
+  .pv tr:not(:last-child) td { border-bottom: 1px solid #eef1f5; }
+  .pv td { padding: 5px 8px; vertical-align: top; }
+  .pv-key { color: var(--muted); white-space: nowrap; padding-right: 14px !important; }
+  .pv-val { word-break: break-word; color: #1c2430; }
+  .pv-num { font-variant-numeric: tabular-nums; color: #0d4ea3; }
+  .pv-bool { color: #2e7d32; font-weight: 600; }
+  .pv-empty { color: #98a2b3; }
+  .pv-json { font-family: Consolas, monospace; font-size: 12px; color: #6b21a8; }
+  .pv-none { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="panel">
+  <form id="f" onsubmit="return false">
+    <div class="grid">
+      <span>Сервер</span><input type="text" id="f_url" placeholder="IP или host">
+      <span>Логин</span><input type="text" id="f_user" value="default">
+      <span>Пароль</span><input type="password" id="f_pass">
+      <span>Мин. зум</span><input type="number" id="f_minzoom" value="9" min="1" max="18">
+      <div class="checks">
+        <label><input type="checkbox" id="f_ssl" checked> SSL (https, порт 8443)</label>
+        <label><input type="checkbox" id="f_insecure" checked> не проверять сертификат</label>
+      </div>
+    </div>
+
+    <h4>Слои (первый — верхний)</h4>
+    <div id="layers"></div>
+    <div class="lhint">У каждого слоя: цвет, таблица и её столбец с полигонами; ↑/↓ — порядок отображения.</div>
+    <div class="btns" style="margin-top:8px">
+      <button type="button" class="link" id="addLayer">+ добавить слой</button>
+    </div>
+
+    <div class="btns">
+      <button type="submit">Подключиться</button>
+      <button type="button" class="secondary" id="saveBtn">Сохранить настройки</button>
+      <button type="button" class="link" id="hideBtn">свернуть</button>
+      <span id="msg"></span>
+    </div>
+  </form>
+  <button type="button" class="link" id="showBtn" style="display:none">настройки</button>
+</div>
+
+<div id="status"><span id="statustext">Укажите параметры и нажмите «Подключиться»</span><button type="button" class="link" id="showSql" style="display:none">SQL</button></div>
+
+<div id="sqlbox">
+  <h3>Последний запрос к ClickHouse</h3>
+  <pre id="sqltext"></pre>
+  <pre id="sqlerr" class="err" style="display:none"></pre>
+  <div class="bar">
+    <button type="button" id="copySql">Скопировать SQL</button>
+    <button type="button" class="link" id="closeSql">закрыть</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const statusEl = $('status'), msg = $('msg');
+const MAX_ROWS = 3000;          // предохранитель на один запрос
+const PALETTE = ['#1565c0','#c62828','#2e7d32','#ef6c00','#6a1b9a','#00838f','#ad1457','#558b2f'];
+let lastSQL = '';
+function say(t, err) { $('statustext').textContent = t; statusEl.className = err ? 'err' : ''; }
+
+function showSqlBox(errText) {
+  $('sqltext').textContent = lastSQL || '(запрос ещё не выполнялся)';
+  const e = $('sqlerr');
+  if (errText) { e.textContent = errText; e.style.display = ''; }
+  else e.style.display = 'none';
+  $('sqlbox').classList.add('show');
+}
+
+// ---------- карта ----------
+const map = L.map('map').setView([55.75, 37.62], 10);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function fmtVal(v) {
+  if (v === null || v === undefined || v === '') return '<span class="pv-empty">—</span>';
+  if (typeof v === 'boolean') return `<span class="pv-bool">${v ? 'да' : 'нет'}</span>`;
+  if (typeof v === 'number') return `<span class="pv-num">${Number.isInteger(v) ? v.toLocaleString('ru-RU') : v}</span>`;
+  if (typeof v === 'string') {
+    if (/^-?\d+$/.test(v) && v.length < 19) return `<span class="pv-num">${(+v).toLocaleString('ru-RU')}</span>`;
+    return esc(v);
+  }
+  const s = JSON.stringify(v);
+  return `<span class="pv-json" title="${esc(s)}">${esc(s.length > 60 ? s.slice(0, 60) + '…' : s)}</span>`;
+}
+
+function popupHTML(props, title, color) {
+  const entries = Object.entries(props);
+  const head = `<div class="pv-title"><span class="pv-dot" style="background:${color}"></span>${esc(title)}</div>`;
+  if (!entries.length) return `<div class="pv">${head}<div class="pv-none">нет атрибутов</div></div>`;
+  const rows = entries.map(([k, v]) =>
+    `<tr><td class="pv-key">${esc(k)}</td><td class="pv-val">${fmtVal(v)}</td></tr>`).join('');
+  return `<div class="pv">${head}<table>${rows}</table></div>`;
+}
+
+// ---------- слои ----------
+// каждый слой: {table, geo, color, lgroup, loaded:Set, needReset}
+let layers = [];
+let connected = false;
+let debounceTimer = null;
+let inFlight = null;
+
+function newLayer(table, geo, color) {
+  return {
+    table: table || '', geo: geo || 'key',
+    color: color || PALETTE[layers.length % PALETTE.length],
+    lgroup: null, loaded: new Set(), needReset: true
+  };
+}
+
+function renderLayersUI() {
+  const box = $('layers');
+  box.innerHTML = '';
+  layers.forEach((l, i) => {
+    const row = document.createElement('div');
+    row.className = 'lrow';
+    row.dataset.idx = i;
+    row.innerHTML =
+      `<div class="drag" draggable="true" title="перетащить">⣿</div>` +
+      `<input type="color" value="${l.color}" title="цвет слоя">` +
+      `<input type="text" placeholder="база.таблица" value="${esc(l.table)}">` +
+      `<input type="text" placeholder="поле полигонов" value="${esc(l.geo)}">` +
+      `<div class="ops">` +
+        `<button type="button" title="выше">↑</button>` +
+        `<button type="button" title="ниже">↓</button>` +
+        `<button type="button" title="удалить слой">✕</button>` +
+      `</div>`;
+    const [color, table, geo] = row.querySelectorAll('input');
+    const [up, down, del] = row.querySelectorAll('.ops button');
+    const handle = row.querySelector('.drag');
+    color.addEventListener('input', () => { l.color = color.value; restyleLayer(l); });
+    table.addEventListener('change', () => { l.table = table.value.trim(); });
+    geo.addEventListener('change', () => { l.geo = geo.value.trim(); });
+    const move = (from, to) => {
+      const [x] = layers.splice(from, 1);
+      layers.splice(to, 0, x);
+      renderLayersUI(); applyOrder(); markDirty();
+    };
+    up.addEventListener('click', () => { if (i > 0) move(i, i - 1); });
+    down.addEventListener('click', () => { if (i < layers.length - 1) move(i, i + 1); });
+    del.addEventListener('click', () => {
+      if (l.lgroup) map.removeLayer(l.lgroup);
+      layers.splice(i, 1); renderLayersUI(); updateCount(); markDirty();
+    });
+    // перетаскивание мышкой
+    handle.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', String(i));
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setDragImage(row, 10, 10);
+      row.classList.add('dragging');
+    });
+    handle.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('dragover'); });
+    row.addEventListener('dragleave', () => row.classList.remove('dragover'));
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.classList.remove('dragover');
+      const from = +e.dataTransfer.getData('text/plain');
+      if (!Number.isNaN(from) && from !== i) move(from, i);
+    });
+    box.appendChild(row);
+  });
+}
+
+function restyleLayer(l) {
+  if (l.lgroup) l.lgroup.setStyle({ color: l.color });
+}
+
+// layers[0] — верхний: поднимаем с нижнего к верхнему
+function applyOrder() {
+  for (let i = layers.length - 1; i >= 0; i--) {
+    if (layers[i].lgroup) layers[i].lgroup.bringToFront();
+  }
+}
+
+function updateCount(extra) {
+  const total = layers.reduce((s, l) => s + l.loaded.size, 0);
+  say(`Показано объектов: ${total}` + (extra || ''));
+}
+
+// ---------- fingerprint браузера -> ключ AES ----------
+function fingerprint() {
+  return [
+    navigator.userAgent, navigator.language, navigator.platform,
+    screen.width, screen.height, screen.colorDepth,
+    navigator.hardwareConcurrency, new Date().getTimezoneOffset()
+  ].join('|');
+}
+async function fpKey(salt) {
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey('raw', enc.encode(fingerprint()), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+const b64 = a => btoa(String.fromCharCode(...new Uint8Array(a)));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function encryptPass(pass) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await fpKey(salt);
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(pass));
+  return b64(salt) + '.' + b64(iv) + '.' + b64(ct);
+}
+async function decryptPass(enc) {
+  const [salt, iv, ct] = enc.split('.').map(unb64);
+  const key = await fpKey(salt);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  return new TextDecoder().decode(pt);
+}
+
+// ---------- адрес ClickHouse ----------
+function chUrl() {
+  let s = $('f_url').value.trim();
+  const ssl = $('f_ssl').checked;
+  if (!/^https?:\/\//i.test(s)) s = (ssl ? 'https://' : 'http://') + s;
+  const u = new URL(s);
+  if (!u.port) u.port = ssl ? '8443' : '8123';
+  return u.origin + '/';
+}
+
+// ---------- конфиг ----------
+async function saveConfig() {
+  const cfg = {
+    url: $('f_url').value.trim(),
+    user: $('f_user').value,
+    pass_enc: await encryptPass($('f_pass').value),
+    minzoom: +$('f_minzoom').value || 9,
+    ssl: $('f_ssl').checked,
+    insecure: $('f_insecure').checked,
+    layers: layers.map(l => ({ table: l.table, geo: l.geo, color: l.color }))
+  };
+  const r = await (await fetch('/api/config', { method: 'POST', body: JSON.stringify(cfg, null, 2) })).json();
+  return r.path;
+}
+async function loadConfig() {
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    if (cfg.url) {
+      $('f_url').value = cfg.url;
+      $('f_user').value = cfg.user ?? 'default';
+      $('f_minzoom').value = cfg.minzoom ?? 9;
+      $('f_ssl').checked = !!cfg.ssl;
+      $('f_insecure').checked = !!cfg.insecure;
+    }
+    if (Array.isArray(cfg.layers) && cfg.layers.length) {
+      layers = cfg.layers.map(l => newLayer(l.table, l.geo, l.color));
+    } else {
+      layers = [newLayer('emr_ch.tbl_polygons_bmt', 'key')];
+    }
+    renderLayersUI();
+    if (cfg.pass_enc) {
+      try {
+        $('f_pass').value = await decryptPass(cfg.pass_enc);
+        connect();
+      } catch { say('Пароль сохранён в другом браузере — введите заново', true); }
+    }
+  } catch (e) { console.error(e); }
+}
+
+// ---------- запросы ----------
+async function chQuery(sql) {
+  lastSQL = sql;
+  $('showSql').style.display = '';
+  const resp = await fetch('/api/query', {
+    method: 'POST',
+    body: JSON.stringify({
+      url: chUrl(), user: $('f_user').value, password: $('f_pass').value,
+      insecure: $('f_insecure').checked, sql
+    })
+  });
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+async function describeLayer(l) {
+  const d = await chQuery(`DESCRIBE TABLE ${l.table} FORMAT JSON`);
+  const names = d.data.map(r => r.name);
+  if (!names.includes(l.geo)) {
+    throw new Error(`В таблице ${l.table} нет колонки «${l.geo}». Есть колонки: ${names.join(', ')}`);
+  }
+}
+
+async function loadLayer(l, signal) {
+  const b = map.getBounds();
+  const resp = await fetch('/api/objects', {
+    method: 'POST', signal,
+    body: JSON.stringify({
+      url: chUrl(), user: $('f_user').value, password: $('f_pass').value,
+      insecure: $('f_insecure').checked,
+      table: l.table, geo: l.geo,
+      bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+      limit: MAX_ROWS, reset: l.needReset
+    })
+  });
+  const data = await resp.json();
+  if (data.error) {
+    if (data.sql) lastSQL = data.sql;
+    throw new Error(`Слой ${l.table}: ${data.error}`);
+  }
+  l.needReset = false;
+  if (data.sql) { lastSQL = data.sql; $('showSql').style.display = ''; }
+
+  if (!l.lgroup) {
+    l.lgroup = L.geoJSON(null, {
+      style: () => ({ color: l.color, weight: 1.5, fillOpacity: 0.15 }),
+      onEachFeature: (f, lf) => {
+        lf.bindPopup(popupHTML(f.properties, l.table, l.color), { maxWidth: 420, className: 'pv-popup' });
+      }
+    }).addTo(map);
+  }
+  const features = [];
+  for (const row of data.data) {
+    const id = String(row.__id);
+    if (l.loaded.has(id)) continue;
+    l.loaded.add(id);
+    const props = {};
+    for (const k of Object.keys(row)) {
+      if (k !== l.geo && k !== '__id') props[k] = row[k];
+    }
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'MultiPolygon', coordinates: row[l.geo] },
+      properties: props
+    });
+  }
+  if (features.length) l.lgroup.addData({ type: 'FeatureCollection', features });
+  return data;
+}
+
+async function loadVisible() {
+  if (!connected || !layers.length) return;
+  const minzoom = +$('f_minzoom').value || 9;
+  if (map.getZoom() < minzoom) {
+    updateCount(` — приблизьте карту (зум ≥ ${minzoom})`);
+    return;
+  }
+  if (inFlight) inFlight.abort();
+  inFlight = new AbortController();
+  say('Загрузка…');
+  try {
+    const results = await Promise.all(layers.map(l => loadLayer(l, inFlight.signal)));
+    applyOrder();
+    const cached = results.every(r => r.cached);
+    const capped = results.some(r => r.rows >= MAX_ROWS);
+    updateCount((cached ? ' (из кэша, без запроса к БД)' : '') +
+                (capped ? ' (лимит запроса, приблизьте карту)' : ''));
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    say(e.message.slice(0, 150), true);
+    showSqlBox(e.message);
+  }
+}
+
+async function connect() {
+  const active = layers.filter(l => l.table);
+  if (!active.length) { say('Добавьте хотя бы один слой с таблицей', true); return; }
+  for (const l of layers) {
+    l.loaded.clear();
+    l.needReset = true;
+    if (l.lgroup) { map.removeLayer(l.lgroup); l.lgroup = null; }
+  }
+  say('Читаю структуру таблиц…');
+  try {
+    for (const l of active) await describeLayer(l);
+  } catch (e) {
+    connected = false;
+    say(e.message.slice(0, 150), true);
+    showSqlBox(e.message);
+    return;
+  }
+  connected = true;
+  collapse(true);
+  loadVisible();
+}
+
+map.on('moveend zoomend', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(loadVisible, 300);
+});
+
+// ---------- панель ----------
+function collapse(yes) {
+  $('panel').classList.toggle('collapsed', yes);
+  $('showBtn').style.display = yes ? '' : 'none';
+}
+$('hideBtn').addEventListener('click', () => collapse(true));
+$('showBtn').addEventListener('click', () => collapse(false));
+$('addLayer').addEventListener('click', () => { layers.push(newLayer('', 'key')); renderLayersUI(); markDirty(); });
+$('f').addEventListener('submit', connect);
+
+// несохранённые изменения: кнопка «Сохранить настройки» подсвечивается синим
+function markDirty() { $('saveBtn').classList.remove('secondary'); }
+function markSaved() { $('saveBtn').classList.add('secondary'); }
+$('f').addEventListener('input', e => { if (e.target !== $('saveBtn')) markDirty(); });
+
+$('saveBtn').addEventListener('click', async () => {
+  try {
+    msg.textContent = 'Сохранено в ' + await saveConfig();
+    markSaved();
+  }
+  catch (e) { msg.textContent = 'Не сохранилось: ' + e.message; }
+});
+$('showSql').addEventListener('click', () => showSqlBox());
+$('closeSql').addEventListener('click', () => $('sqlbox').classList.remove('show'));
+$('copySql').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(lastSQL); $('copySql').textContent = 'Скопировано!'; }
+  catch {
+    const r = document.createRange(); r.selectNodeContents($('sqltext'));
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+    $('copySql').textContent = 'Выделено — Ctrl+C';
+  }
+  setTimeout(() => $('copySql').textContent = 'Скопировать SQL', 2000);
+});
+
+loadConfig();
+</script>
+</body>
+</html>

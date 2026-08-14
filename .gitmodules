@@ -1,0 +1,3 @@
+[submodule "web/vendor/Demo-H3-Hex"]
+	path = web/vendor/Demo-H3-Hex
+	url = https://github.com/akprof2000/Demo-H3-Hex
