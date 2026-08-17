@@ -47,6 +47,11 @@ jobs:
           VER="${GITHUB_REF_NAME#v}"
           go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .
 
+      - name: Упаковка chviewer.exe в zip
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          7z a -tzip "ClickHouse-Show-Polygons-$VER-portable.zip" chviewer.exe README.md LICENSE
+
       - name: Сборка MSI-инсталлятора (WiX)
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -58,7 +63,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            chviewer.exe
+            ClickHouse-Show-Polygons-*-portable.zip
             ClickHouse-Show-Polygons-*.msi
           generate_release_notes: true
 
