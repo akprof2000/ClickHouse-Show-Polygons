@@ -375,15 +375,26 @@ bash build.sh          # соберёт web/dist и chviewer.exe с версие
 ├── test.sh                  # 25 автотестов
 ├── testenv/setup.sql        # тестовые таблицы для стенда
 ├── VERSION                  # версия, вшивается в exe
-└── .github/workflows/release.yml   # релиз по тегу
+└── .github/workflows/release.yml   # релиз по тегу или вручную
 ```
 
 ## Релизы
 
-Релиз собирается GitHub Actions автоматически по тегу — только под Windows:
+Релиз собирается GitHub Actions — только под Windows. Есть два способа запуска.
+
+**По тегу** (как раньше):
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.3 && git push origin v1.0.3
+```
+
+**Вручную, без тега** — вкладка **Actions** → workflow **release** → **Run workflow**.
+Поле «Версия» можно оставить пустым: тогда версия берётся из файла `VERSION`,
+а тег `vX.Y.Z` создаётся самим релизом. То же самое из консоли:
+
+```bash
+gh workflow run release.yml                 # версия из файла VERSION
+gh workflow run release.yml -f version=1.0.3   # или явно
 ```
 
 В релиз попадают два файла:
