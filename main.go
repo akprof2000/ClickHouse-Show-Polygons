@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,6 +38,85 @@ func exeDir() string {
 
 func configPath() string { return filepath.Join(exeDir(), "config.json") }
 
+// ---------- защита локального сервера ----------
+
+// Сервер слушает только 127.0.0.1, но этого мало. Любая открытая в браузере
+// посторонняя страница может слать запросы на http://localhost:8137 (CSRF),
+// а DNS-имя, указывающее на 127.0.0.1, позволяет обойти проверку адреса
+// (DNS rebinding) и превратить /api/query в SSRF-прокси во внутреннюю сеть.
+// Поэтому у каждого /api-обработчика проверяем три вещи:
+//   1. Host — только localhost/127.0.0.1 (против DNS rebinding);
+//   2. Origin и Sec-Fetch-Site — запрос не должен приходить с чужой страницы;
+//   3. Content-Type: application/json на изменяющих запросах — простая
+//      HTML-форма такой заголовок поставить не может, а fetch с ним уже
+//      требует CORS-разрешения, которого мы не даём.
+func isLocalHost(hostport string) bool {
+	h := hostport
+	if x, _, err := net.SplitHostPort(hostport); err == nil {
+		h = x
+	}
+	h = strings.Trim(h, "[]")
+	return h == "127.0.0.1" || h == "::1" || h == "localhost"
+}
+
+func guard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// ответы API — только данные, браузер не должен угадывать их тип
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
+
+		if !isLocalHost(r.Host) {
+			log.Printf("SECURITY %s отклонён: чужой Host %q", r.URL.Path, r.Host)
+			http.Error(w, `{"error":"bad host"}`, http.StatusForbidden)
+			return
+		}
+		if o := r.Header.Get("Origin"); o != "" {
+			u, err := url.Parse(o)
+			if err != nil || !isLocalHost(u.Host) {
+				log.Printf("SECURITY %s отклонён: межсайтовый Origin %q", r.URL.Path, o)
+				http.Error(w, `{"error":"cross-origin"}`, http.StatusForbidden)
+				return
+			}
+		}
+		if s := r.Header.Get("Sec-Fetch-Site"); s != "" && s != "same-origin" && s != "none" {
+			log.Printf("SECURITY %s отклонён: Sec-Fetch-Site=%q", r.URL.Path, s)
+			http.Error(w, `{"error":"cross-origin"}`, http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			ct := r.Header.Get("Content-Type")
+			if i := strings.IndexByte(ct, ';'); i >= 0 {
+				ct = ct[:i]
+			}
+			if strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
+				log.Printf("SECURITY %s отклонён: Content-Type %q вместо application/json", r.URL.Path, r.Header.Get("Content-Type"))
+				http.Error(w, `{"error":"content-type"}`, http.StatusUnsupportedMediaType)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+// статика: тоже запрещаем угадывание типа и сторонние ресурсы
+func staticHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; img-src 'self' data: blob: https:; "+
+				"style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; "+
+				"connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// единый JSON-ответ об ошибке: сообщение экранируется, а не клеится в строку
+func writeJSONErr(w http.ResponseWriter, code int, msg string) {
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
 // ---------- логирование ----------
 
 func setupLog() {
@@ -66,6 +144,11 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("{}"))
 			return
 		}
+		if !json.Valid(data) {
+			log.Printf("ERROR CONFIG чтение: %s содержит не JSON — отдаю пустой конфиг", configPath())
+			w.Write([]byte("{}"))
+			return
+		}
 		log.Printf("CONFIG чтение: отдано %d байт из %s", len(data), configPath())
 		w.Write(data)
 	case http.MethodPost:
@@ -77,7 +160,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := os.WriteFile(configPath(), data, 0600); err != nil {
 			log.Printf("ERROR CONFIG сохранение в %s: %v", configPath(), err)
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+			writeJSONErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		log.Printf("CONFIG сохранение: записано %d байт в %s", len(data), configPath())
@@ -90,7 +173,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 // ---------- прокси-запрос к ClickHouse ----------
 
 type queryReq struct {
-	URL      string `json:"url"`      // http://host:8123/ или https://host:8443/
+	URL      string `json:"url"` // http://host:8123/ или https://host:8443/
 	User     string `json:"user"`
 	Password string `json:"password"` // расшифрованный браузером, только на время запроса; в лог не пишется
 	Insecure bool   `json:"insecure"` // не проверять сертификат
@@ -148,6 +231,9 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("QUERY OK %s: HTTP 200, %d байт за %s", u.Host, len(body), dur)
+	// ответ ClickHouse — данные, не HTML-документ: заголовки Content-Type и
+	// nosniff (см. guard) не дают браузеру интерпретировать его как страницу
+	w.Header().Set("Content-Disposition", "attachment")
 	w.Write(body)
 }
 
@@ -191,7 +277,7 @@ type objectsReq struct {
 	Insecure bool      `json:"insecure"`
 	Table    string    `json:"table"`
 	Geo      string    `json:"geo"`
-	Bbox     []float64 `json:"bbox"`    // [w,s,e,n]
+	Bbox     []float64 `json:"bbox"` // [w,s,e,n]
 	Limit    int       `json:"limit"`
 	MinDeg   float64   `json:"min_deg"` // фильтр детализации: объекты мельче этого размера (в градусах) не грузятся
 	Reset    bool      `json:"reset"`   // принудительно сбросить кэш (кнопка «Подключиться»)
@@ -523,25 +609,21 @@ func main() {
 		log.Fatalf("FATAL встроенные файлы недоступны: %v", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(static)))
-	mux.HandleFunc("/api/config", handleConfig)
-	mux.HandleFunc("/api/query", handleQuery)
-	mux.HandleFunc("/api/objects", handleObjects)
-	mux.HandleFunc("/api/search", handleSearch)
+	mux.Handle("/", staticHeaders(http.FileServer(http.FS(static))))
+	mux.HandleFunc("/api/config", guard(handleConfig))
+	mux.HandleFunc("/api/query", guard(handleQuery))
+	mux.HandleFunc("/api/objects", guard(handleObjects))
+	mux.HandleFunc("/api/search", guard(handleSearch))
 	// машинный секрет для шифрования пароля: случайный, создаётся при первом
 	// запуске, живёт рядом с exe. Ключ = PBKDF2(отпечаток браузера + секрет),
 	// так что одного знания схемы для расшифровки недостаточно.
-	mux.HandleFunc("/api/secret", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/secret", guard(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		p := filepath.Join(exeDir(), "secret.key")
 		data, err := os.ReadFile(p)
 		if err != nil || len(data) < 32 {
-			buf := make([]byte, 32)
-			if _, err := rand.Read(buf); err != nil {
-				http.Error(w, `{"error":"rand"}`, http.StatusInternalServerError)
-				return
-			}
-			data = []byte(hex.EncodeToString(buf))
+			// crypto/rand.Text() — криптостойкая строка (~128 бит энтропии)
+			data = []byte(rand.Text() + rand.Text())
 			if err := os.WriteFile(p, data, 0600); err != nil {
 				log.Printf("WARN не удалось сохранить secret.key: %v", err)
 			} else {
@@ -549,11 +631,11 @@ func main() {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]string{"secret": string(data)})
-	})
-	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/version", guard(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"version": version})
-	})
+	}))
 
 	// слушаем только localhost: порт 8137, если занят — какой даст система
 	ln, err := net.Listen("tcp", "127.0.0.1:8137")
