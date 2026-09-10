@@ -6,6 +6,7 @@ set -u
 cd "$(dirname "$0")"
 PASS=0; FAIL=0
 APP=http://127.0.0.1:8137
+CT_JSON="Content-Type: application/json"  # без него guard в main.go вернёт 415
 
 ok()   { PASS=$((PASS+1)); echo "  [OK]   $1"; }
 fail() { FAIL=$((FAIL+1)); echo "  [FAIL] $1"; }
@@ -15,7 +16,7 @@ check() { # check "описание" условие(0=ок)
 
 query() { # query <ch_url> <insecure> [password]
   local pw="${3-test123}"
-  curl -s -X POST "$APP/api/query" --data-binary "{
+  curl -s -X POST -H "$CT_JSON" "$APP/api/query" --data-binary "{
     \"url\":\"$1\",\"user\":\"default\",\"password\":\"$pw\",
     \"insecure\":$2,
     \"sql\":\"SELECT * FROM emr_ch.tbl_polygons_bmt LIMIT 190 FORMAT JSON\"}"
@@ -37,7 +38,7 @@ for i in $(seq 1 20); do curl -s --max-time 2 "$APP/" >/dev/null 2>&1 && break; 
 curl -s "$APP/" | grep -q "ClickHouse Viewer"; check "страница отдаётся" $?
 
 echo "=== 4. Конфиг: сохранение и чтение ==="
-curl -s -X POST "$APP/api/config" --data-binary '{"url":"localhost","user":"default","pass_enc":"x.y.z","table":"emr_ch.tbl_polygons_bmt","geo":"key","limit":190,"ssl":true,"insecure":true}' | grep -q '"ok":true'
+curl -s -X POST -H "$CT_JSON" "$APP/api/config" --data-binary '{"url":"localhost","user":"default","pass_enc":"x.y.z","table":"emr_ch.tbl_polygons_bmt","geo":"key","limit":190,"ssl":true,"insecure":true}' | grep -q '"ok":true'
 check "POST /api/config" $?
 curl -s "$APP/api/config" | grep -q '"pass_enc":"x.y.z"'; check "GET /api/config возвращает сохранённое" $?
 [ -f config.json ]; check "config.json создан рядом с exe" $?
@@ -57,22 +58,22 @@ echo "$R" | grep -qi 'error.*certificate\|certificate.*error\|x509'; check "inse
 
 echo "=== 6б. Bbox-фильтр (читаем только видимую область) ==="
 BBOX_SQL='WITH flatten(flatten(key)) AS pts, arrayMap(p -> p.1, pts) AS xs, arrayMap(p -> p.2, pts) AS ys SELECT bmt FROM emr_ch.tbl_polygons_bmt WHERE arrayMin(xs) <= 37.6 AND arrayMax(xs) >= 37.4 AND arrayMin(ys) <= 55.9 AND arrayMax(ys) >= 55.6 FORMAT JSON'
-R=$(curl -s -X POST "$APP/api/query" --data-binary "{\"url\":\"http://localhost:8123/\",\"user\":\"default\",\"password\":\"test123\",\"insecure\":false,\"sql\":\"$BBOX_SQL\"}")
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/query" --data-binary "{\"url\":\"http://localhost:8123/\",\"user\":\"default\",\"password\":\"test123\",\"insecure\":false,\"sql\":\"$BBOX_SQL\"}")
 ROWS=$(echo "$R" | grep -o '"rows": [0-9]*' | grep -o '[0-9]*')
 [ -n "$ROWS" ] && [ "$ROWS" -gt 0 ] && [ "$ROWS" -lt 200 ]; check "bbox вернул часть данных ($ROWS из 200)" $?
 BBOX_SQL2='WITH flatten(flatten(key)) AS pts, arrayMap(p -> p.1, pts) AS xs, arrayMap(p -> p.2, pts) AS ys SELECT bmt FROM emr_ch.tbl_polygons_bmt WHERE arrayMin(xs) <= 30.0 AND arrayMax(xs) >= 29.0 AND arrayMin(ys) <= 50.0 AND arrayMax(ys) >= 49.0 FORMAT JSON'
-R=$(curl -s -X POST "$APP/api/query" --data-binary "{\"url\":\"http://localhost:8123/\",\"user\":\"default\",\"password\":\"test123\",\"insecure\":false,\"sql\":\"$BBOX_SQL2\"}")
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/query" --data-binary "{\"url\":\"http://localhost:8123/\",\"user\":\"default\",\"password\":\"test123\",\"insecure\":false,\"sql\":\"$BBOX_SQL2\"}")
 echo "$R" | grep -q '"rows": 0'; check "bbox вне данных вернул 0 строк" $?
 
 echo "=== 6в. Кэш объектов на бэке (/api/objects) ==="
 OBJ_BODY='{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","bbox":[37.4,55.6,38.0,56.0],"limit":3000,"reset":RESET}'
-R=$(curl -s -X POST "$APP/api/objects" --data-binary "${OBJ_BODY/RESET/true}")
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/objects" --data-binary "${OBJ_BODY/RESET/true}")
 echo "$R" | grep -q '"cached":false'; check "первый запрос идёт в БД" $?
 N1=$(echo "$R" | grep -o '"total_cached":[0-9]*' | grep -o '[0-9]*')
 [ "$N1" = "200" ]; check "в кэш попали все 200 объектов" $?
-R=$(curl -s -X POST "$APP/api/objects" --data-binary "${OBJ_BODY/RESET/false}")
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/objects" --data-binary "${OBJ_BODY/RESET/false}")
 echo "$R" | grep -q '"cached":true'; check "повторный запрос отдан из кэша без БД" $?
-R=$(curl -s -X POST "$APP/api/objects" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","bbox":[37.45,55.65,37.55,55.75],"limit":3000,"reset":false}')
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/objects" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","bbox":[37.45,55.65,37.55,55.75],"limit":3000,"reset":false}')
 NROWS=$(echo "$R" | grep -o '"rows":[0-9]*' | grep -o '[0-9]*')
 echo "$R" | grep -q '"cached":true' && [ -n "$NROWS" ] && [ "$NROWS" -gt 0 ] && [ "$NROWS" -lt 200 ]
 check "малый bbox внутри покрытой области: из кэша, часть объектов ($NROWS)" $?
@@ -80,12 +81,12 @@ check "малый bbox внутри покрытой области: из кэш
 echo "=== 6г. Контекстный поиск (/api/search) ==="
 # кириллицу передаём через файл: аргументы командной строки Windows перекодирует
 printf '%s' '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","query":"участок 96","limit":50}' > /tmp/search_q.json
-R=$(curl -s -X POST "$APP/api/search" --data-binary @/tmp/search_q.json)
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/search" --data-binary @/tmp/search_q.json)
 echo "$R" | grep -q 'участок 96'; check "поиск по строке нашёл объект" $?
 echo "$R" | grep -q '"__w"'; check "результат содержит bbox для перелёта" $?
-R=$(curl -s -X POST "$APP/api/search" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","query":"1095","limit":50}')
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/search" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","query":"1095","limit":50}')
 echo "$R" | grep -q '"rows":[1-9]'; check "поиск по числовому полю работает" $?
-R=$(curl -s -X POST "$APP/api/search" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","query":"такого-нет-нигде","limit":50}')
+R=$(curl -s -X POST -H "$CT_JSON" "$APP/api/search" --data-binary '{"url":"http://localhost:8123/","user":"default","password":"test123","insecure":false,"table":"emr_ch.tbl_polygons_bmt","geo":"key","query":"такого-нет-нигде","limit":50}')
 echo "$R" | grep -q '"rows":0'; check "несуществующая строка -> 0 результатов" $?
 
 echo "=== 7. Ошибочные сценарии ==="
