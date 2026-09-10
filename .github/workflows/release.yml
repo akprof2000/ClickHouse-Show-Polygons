@@ -41,7 +41,7 @@ jobs:
           echo "VER=$VER"   >> "$GITHUB_ENV"
           echo "TAG=v$VER"  >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
