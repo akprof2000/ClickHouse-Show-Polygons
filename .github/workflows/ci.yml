@@ -20,10 +20,20 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      - name: Установка зависимостей фронтенда
+        working-directory: web
+        run: npm ci
+
+      # Проверка зависимостей на известные уязвимости. Падаем на high и critical:
+      # maplibre-gl и h3-js попадают в поставляемый bundle.js, поэтому их
+      # уязвимости — это уязвимости продукта, а не только сборочной машины.
+      - name: Аудит зависимостей (npm audit)
+        working-directory: web
+        run: npm audit --audit-level=high
+
       - name: Сборка фронтенда
         working-directory: web
         run: |
-          npm ci
           npm run build
           cp index.html dist/
 

@@ -6,9 +6,9 @@
   },
   "dependencies": {
     "h3-js": "^4.1.0",
-    "maplibre-gl": "^4.7.1"
+    "maplibre-gl": "^6.9.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0"
+    "esbuild": "^0.25.12"
   }
 }
