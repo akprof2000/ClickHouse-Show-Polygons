@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- MSI-инсталлятор ClickHouse Show Polygons (WiX v5).
+<!-- MSI-инсталлятор ClickHouse Show Polygons (WiX v6; версия 7 требует
+     принятия платного соглашения OSMF, поэтому остаёмся на шестой).
      Сборка: wix build -arch x64 -d AppVersion=1.0.0 -o Setup.msi installer.wxs
      Установка per-user (без прав администратора) в %LOCALAPPDATA%\Programs,
      чтобы config.json и secret.key рядом с exe оставались записываемыми. -->

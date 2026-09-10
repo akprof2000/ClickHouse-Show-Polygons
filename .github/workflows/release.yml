@@ -23,7 +23,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive   # web/vendor/Demo-H3-Hex — сетка H3
 
@@ -41,9 +41,9 @@ jobs:
           echo "VER=$VER"   >> "$GITHUB_ENV"
           echo "TAG=v$VER"  >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -54,9 +54,9 @@ jobs:
           npm run build
           cp index.html dist/
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
           cache: false
 
       - name: Иконка и версия в ресурсы Windows
@@ -74,12 +74,12 @@ jobs:
 
       - name: Сборка MSI-инсталлятора (WiX)
         run: |
-          dotnet tool install --global wix --version 5.0.2
+          dotnet tool install --global wix --version 6.0.2
           wix build -arch x64 -d AppVersion="$VER" \
             -o "ClickHouse-Show-Polygons-$VER.msi" installer.wxs
 
       - name: Публикация релиза
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
