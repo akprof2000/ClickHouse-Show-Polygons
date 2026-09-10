@@ -2,7 +2,7 @@
   "name": "chviewer-web",
   "private": true,
   "scripts": {
-    "build": "esbuild app.js --bundle --minify --format=iife --outfile=dist/bundle.js --loader:.ts=ts"
+    "build": "esbuild app.js --bundle --minify --format=iife --outfile=dist/bundle.js --loader:.ts=ts && esbuild node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs --bundle --minify --format=esm --outfile=dist/maplibre-gl-worker.mjs"
   },
   "dependencies": {
     "h3-js": "^4.1.0",

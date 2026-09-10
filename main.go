@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,7 +26,8 @@ import (
 var webFS embed.FS
 
 // версия приложения; подставляется при сборке:
-//   go build -ldflags "-X main.version=1.2.3"
+//
+//	go build -ldflags "-X main.version=1.2.3"
 var version = "dev"
 
 func exeDir() string {
@@ -45,11 +47,11 @@ func configPath() string { return filepath.Join(exeDir(), "config.json") }
 // а DNS-имя, указывающее на 127.0.0.1, позволяет обойти проверку адреса
 // (DNS rebinding) и превратить /api/query в SSRF-прокси во внутреннюю сеть.
 // Поэтому у каждого /api-обработчика проверяем три вещи:
-//   1. Host — только localhost/127.0.0.1 (против DNS rebinding);
-//   2. Origin и Sec-Fetch-Site — запрос не должен приходить с чужой страницы;
-//   3. Content-Type: application/json на изменяющих запросах — простая
-//      HTML-форма такой заголовок поставить не может, а fetch с ним уже
-//      требует CORS-разрешения, которого мы не даём.
+//  1. Host — только localhost/127.0.0.1 (против DNS rebinding);
+//  2. Origin и Sec-Fetch-Site — запрос не должен приходить с чужой страницы;
+//  3. Content-Type: application/json на изменяющих запросах — простая
+//     HTML-форма такой заголовок поставить не может, а fetch с ним уже
+//     требует CORS-разрешения, которого мы не даём.
 func isLocalHost(hostport string) bool {
 	h := hostport
 	if x, _, err := net.SplitHostPort(hostport); err == nil {
@@ -603,6 +605,13 @@ func openBrowser(url string) {
 func main() {
 	setupLog()
 	log.Printf("=== ClickHouse Viewer v%s запускается === exe: %s", version, exeDir())
+
+	// Go на Windows берёт типы из реестра и отдаёт .mjs как text/plain, а
+	// модульный воркер maplibre с таким типом не загрузится (тем более под
+	// nosniff). Регистрируем правильный тип явно.
+	if err := mime.AddExtensionType(".mjs", "text/javascript"); err != nil {
+		log.Printf("WARN не удалось задать тип для .mjs: %v", err)
+	}
 
 	static, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
