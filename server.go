@@ -161,6 +161,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"logged_in":   s.token == "" || s.tokenOK(r),
 		"clickhouse":  s.ch.Addrs(),
 		"credentials": credSource(s.cfg.ClickHouse),
+		"basemaps":    s.cfg.Basemaps,
 	})
 }
 

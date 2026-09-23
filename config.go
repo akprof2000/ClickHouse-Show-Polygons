@@ -48,6 +48,84 @@ type Config struct {
 	Auth       AuthConfig `yaml:"auth"`
 	ClickHouse CHConfig   `yaml:"clickhouse"`
 	TLS        TLSConfig  `yaml:"tls"`
+
+	// Basemaps — подложки карты на выбор. Пусто = набор по умолчанию.
+	Basemaps []Basemap `yaml:"basemaps"`
+}
+
+// Basemap — растровая подложка. Какие источники включать, решает
+// администратор: у Яндекса, 2ГИС и Google правила использования требуют
+// работать через их собственные API, поэтому по умолчанию они выключены.
+type Basemap struct {
+	Name        string   `yaml:"name" json:"name"`
+	Tiles       []string `yaml:"tiles" json:"tiles"`
+	Attribution string   `yaml:"attribution" json:"attribution"`
+	MaxZoom     int      `yaml:"max_zoom" json:"max_zoom"`
+	TileSize    int      `yaml:"tile_size" json:"tile_size"`
+	// Projection: "3857" (по умолчанию) или "3395" — эллипсоидальный
+	// меркатор, в котором отдаёт тайлы Яндекс. Подложка в 3395 смещается
+	// относительно данных, поэтому режим помечается в интерфейсе.
+	Projection string `yaml:"projection" json:"projection"`
+}
+
+// defaultBasemaps — то, что можно отдавать без отдельных договорённостей.
+func defaultBasemaps() []Basemap {
+	return []Basemap{
+		{
+			Name:        "OpenStreetMap",
+			Tiles:       []string{"https://tile.openstreetmap.org/{z}/{x}/{y}.png"},
+			Attribution: "© OpenStreetMap contributors",
+			MaxZoom:     19,
+		},
+		{
+			Name:        "OSM светлая (Carto)",
+			Tiles:       []string{"https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"},
+			Attribution: "© OpenStreetMap contributors, © CARTO",
+			MaxZoom:     19,
+		},
+		{
+			Name:        "OSM тёмная (Carto)",
+			Tiles:       []string{"https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"},
+			Attribution: "© OpenStreetMap contributors, © CARTO",
+			MaxZoom:     19,
+		},
+		{
+			Name:        "Спутник (Esri)",
+			Tiles:       []string{"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"},
+			Attribution: "© Esri, Maxar, Earthstar Geographics",
+			MaxZoom:     19,
+		},
+		{
+			Name:        "Рельеф (OpenTopoMap)",
+			Tiles:       []string{"https://a.tile.opentopomap.org/{z}/{x}/{y}.png"},
+			Attribution: "© OpenStreetMap contributors, SRTM, © OpenTopoMap (CC-BY-SA)",
+			MaxZoom:     17,
+		},
+	}
+}
+
+// normalizeBasemaps подставляет значения по умолчанию и отбрасывает пустые.
+func (c *Config) normalizeBasemaps() {
+	if len(c.Basemaps) == 0 {
+		c.Basemaps = defaultBasemaps()
+	}
+	out := c.Basemaps[:0]
+	for _, b := range c.Basemaps {
+		if strings.TrimSpace(b.Name) == "" || len(b.Tiles) == 0 {
+			continue
+		}
+		if b.MaxZoom <= 0 {
+			b.MaxZoom = 19
+		}
+		if b.TileSize <= 0 {
+			b.TileSize = 256
+		}
+		if b.Projection == "" {
+			b.Projection = "3857"
+		}
+		out = append(out, b)
+	}
+	c.Basemaps = out
 }
 
 // AuthConfig — вход в веб-интерфейс. Токен спрашивается у пользователя один
@@ -260,6 +338,10 @@ func (c *Config) normalize() error {
 	if c.ClickHouse.PAM.Secret == "" && c.ClickHouse.PasswordEnv == "" && c.ClickHouse.User == "" {
 		return fmt.Errorf("clickhouse: задайте либо pam.secret, либо user + password_env")
 	}
+	c.normalizeBasemaps()
+	if len(c.Basemaps) == 0 {
+		return fmt.Errorf("basemaps: ни одной подложки — у каждой нужны name и tiles")
+	}
 	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
 		return fmt.Errorf("tls: нужны оба файла — cert_file и key_file")
 	}
@@ -326,6 +408,33 @@ clickhouse:
   ca_cert: []             # ["/etc/ssl/ch-ca.pem"] для tls: ca
   tls_cert: ""            # клиентский сертификат (взаимный TLS)
   tls_key: ""             # ключ клиентского сертификата
+
+# Подложки карты на выбор. Пусто = встроенный набор: OpenStreetMap, светлая и
+# тёмная Carto, спутник Esri, рельеф OpenTopoMap.
+#
+# Яндекс, 2ГИС и Google по своим правилам разрешают тайлы только через их
+# собственные API и SDK, поэтому здесь их нет. Если у вас есть договор или
+# внутренний прокси, добавьте их сами — примеры закомментированы.
+basemaps: []
+#  - name: "OpenStreetMap"
+#    tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"]
+#    attribution: "© OpenStreetMap contributors"
+#    max_zoom: 19
+#  - name: "Яндекс"
+#    tiles: ["https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU"]
+#    attribution: "© Яндекс"
+#    projection: "3395"   # Яндекс отдаёт эллипсоидальный меркатор: подложка
+#                         # смещается относительно данных, тем сильнее, чем
+#                         # дальше от экватора
+#  - name: "2ГИС"
+#    tiles: ["https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}"]
+#    attribution: "© 2ГИС"
+#  - name: "Google"
+#    tiles: ["https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"]
+#    attribution: "© Google"
+#  - name: "Свой тайл-сервер"
+#    tiles: ["https://tiles.corp.local/{z}/{x}/{y}.png"]
+#    attribution: "Внутренний тайл-сервер"
 
 # HTTPS самого веб-сервера. Пусто = HTTP (нормально за nginx).
 tls:

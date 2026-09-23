@@ -16,7 +16,6 @@ import {
 // HTML-форма со стороннего сайта такой заголовок поставить не может —
 // значит, CSRF на localhost:8137 невозможен.
 const JSON_HDR = { 'Content-Type': 'application/json' };
-import { osmStyle } from './vendor/Demo-H3-Hex/src/mapStyle.ts';
 
 const $ = id => document.getElementById(id);
 const statusEl = $('status'), msg = $('msg');
@@ -44,9 +43,42 @@ function showSqlBox(errText) {
 // его адрес явно. Вызов обязан идти до создания карты.
 maplibregl.setWorkerUrl(new URL('maplibre-gl-worker.mjs', document.baseURI).href);
 
+// ---------- подложки ----------
+// Список приходит с сервера: какие источники включены, решает администратор.
+let basemaps = [];
+let basemapIndex = 0;
+
+function basemapStyle(b) {
+  return {
+    version: 8,
+    sources: {
+      base: {
+        type: 'raster',
+        tiles: b.tiles,
+        tileSize: b.tile_size || 256,
+        maxzoom: b.max_zoom || 19,
+        attribution: b.attribution || ''
+      }
+    },
+    layers: [
+      { id: 'bg', type: 'background', paint: { 'background-color': '#0d1117' } },
+      { id: 'base', type: 'raster', source: 'base' }
+    ]
+  };
+}
+
+// Подложка по умолчанию, пока не пришёл ответ сервера: без неё карту
+// нельзя создать, а создаётся она сразу при загрузке страницы.
+const FALLBACK_BASEMAP = {
+  name: 'OpenStreetMap',
+  tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+  attribution: '© OpenStreetMap contributors',
+  max_zoom: 19
+};
+
 const map = new maplibregl.Map({
   container: 'map',
-  style: osmStyle(),
+  style: basemapStyle(FALLBACK_BASEMAP),
   center: [37.62, 55.75],
   zoom: 10,
   attributionControl: { compact: true }
@@ -401,10 +433,64 @@ async function loadInfo() {
   serverInfo = await (await fetch('/api/info')).json();
   $('srvUrl').textContent = serverInfo.clickhouse || '—';
   $('srvCreds').textContent = serverInfo.credentials || '—';
+  fillBasemaps(serverInfo.basemaps);
   const hint = document.querySelector('.lhint');
   if (hint && serverInfo.version) hint.textContent += ` · v${serverInfo.version}`;
   return serverInfo;
 }
+
+function fillBasemaps(list) {
+  basemaps = (list && list.length) ? list : [FALLBACK_BASEMAP];
+  const sel = $('basemap');
+  sel.innerHTML = '';
+  basemaps.forEach((b, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = b.name;
+    sel.appendChild(o);
+  });
+  // выбор подложки личный, поэтому помним его в браузере, а не на сервере
+  let saved = 0;
+  try { saved = Math.max(0, basemaps.findIndex(b => b.name === localStorage.getItem('basemap'))); } catch {}
+  sel.value = String(saved);
+  setBasemap(saved, true);
+}
+
+function setBasemap(i, initial) {
+  const b = basemaps[i];
+  if (!b) return;
+  basemapIndex = i;
+  try { localStorage.setItem('basemap', b.name); } catch {}
+
+  // Яндекс отдаёт тайлы в эллипсоидальном меркаторе: подложка уедет
+  // относительно данных, и молчать об этом нельзя
+  const hint = $('basemapHint');
+  if (String(b.projection) === '3395') {
+    hint.textContent = 'Подложка в проекции EPSG:3395 — смещена относительно данных, тем сильнее, чем дальше от экватора.';
+    hint.style.display = '';
+  } else {
+    hint.style.display = 'none';
+  }
+
+  if (initial && map.getSource('base')) {
+    // стиль уже такой же — незачем пересобирать слои
+    const cur = map.getStyle().sources.base;
+    if (cur && String(cur.tiles) === String(b.tiles)) return;
+  }
+  // setStyle убирает все слои, включая наши: ставим их заново, когда
+  // новый стиль загрузится
+  map.setStyle(basemapStyle(b));
+  map.once('styledata', () => {
+    rebuildMapLayers();
+    for (const l of layers) {
+      if (l.kind === 'table' && map.getSource(l.id)) {
+        map.getSource(l.id).setData({ type: 'FeatureCollection', features: l.features });
+      }
+    }
+  });
+}
+
+$('basemap').addEventListener('change', e => setBasemap(+e.target.value));
 
 function showLogin(show) { $('login').style.display = show ? 'flex' : 'none'; }
 

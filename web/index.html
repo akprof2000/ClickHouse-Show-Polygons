@@ -172,6 +172,7 @@
 .srv-val { font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all }
 .tpl { display:flex; gap:8px; align-items:center; margin-bottom:4px }
 .tpl select, .tpl input { flex:1; min-width:0 }
+.srv select { width:100% }
 
 /* экран входа поверх карты */
 #login { position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center;
@@ -205,6 +206,12 @@
       <span class="srv-label">Учётные данные</span>
       <span class="srv-val" id="srvCreds">…</span>
     </div>
+
+    <div class="srv" style="margin-bottom:6px">
+      <span class="srv-label">Подложка</span>
+      <select id="basemap"></select>
+    </div>
+    <div class="lhint" id="basemapHint" style="display:none"></div>
 
     <h4>Общие шаблоны</h4>
     <div class="tpl">
