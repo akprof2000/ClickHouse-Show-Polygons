@@ -1,7 +1,7 @@
 #!/bin/bash
 # Автотест chviewer в серверном режиме.
-# Требует: запущенный ClickHouse в docker (ch-test) на 8123 (http) и 8443
-# (https, self-signed), пользователь default / test123, таблица
+# Требует: запущенный ClickHouse в docker (ch-test) на 9000 (native) и 9440
+# (native + TLS, self-signed), пользователь default / test123, таблица
 # emr_ch.tbl_polygons_bmt с 200 строками (см. testenv/setup.sql).
 set -u
 cd "$(dirname "$0")"
@@ -29,8 +29,11 @@ code() { # код ответа без токена
 }
 
 echo "=== 1. Предусловия: ClickHouse доступен ==="
-curl -s --max-time 5 http://localhost:8123/ping | grep -q Ok; check "http  8123 ping" $?
-curl -sk --max-time 5 https://localhost:8443/ping | grep -q Ok; check "https 8443 ping" $?
+curl -s --max-time 5 http://localhost:8123/ping | grep -q Ok; check "http 8123 (для заливки данных)" $?
+docker exec ch-test clickhouse-client --password test123 -q "SELECT 1" >/dev/null 2>&1
+check "native 9000 отвечает" $?
+echo | openssl s_client -connect localhost:9440 2>/dev/null | grep -q CONNECTED
+check "native+TLS 9440 слушает" $?
 
 echo "=== 2. Сборка ==="
 VER=$(tr -d ' \r\n' < VERSION)
@@ -50,7 +53,7 @@ data_dir: "$TMPW/data"
 auth:
   token_env: "CHVIEWER_TEST_TOKEN"
 clickhouse:
-  addr: ["localhost:8123"]
+  addr: ["localhost:9000"]
   database: "default"
   tls: "off"
   user: "default"
@@ -83,8 +86,8 @@ curl -s "$APP/" "$APP/bundle.js" | grep -qi 'test123'; check "пароля не�
 api GET /api/info | grep -qi 'test123'; check "пароля нет в /api/info" $((! $?))
 
 echo "=== 6. Запросы к ClickHouse (адрес берётся из конфига) ==="
-R=$(api POST /api/query '{"sql":"SELECT * FROM emr_ch.tbl_polygons_bmt LIMIT 190 FORMAT JSON"}')
-echo "$R" | grep -q '"rows": 190'; check "получено 190 строк" $?
+R=$(api POST /api/query '{"sql":"SELECT * FROM emr_ch.tbl_polygons_bmt LIMIT 190"}')
+echo "$R" | grep -q '"rows":190'; check "получено 190 строк" $?
 echo "$R" | grep -q 'БМТ участок'; check "кириллица не побилась" $?
 echo "$R" | tr -d ' \n\t' | grep -q '"key":\[\[\[\[37\.5'; check "мультиполигон пришёл вложенными массивами" $?
 
@@ -135,7 +138,7 @@ data_dir: "$TMPW/data"
 auth:
   token_env: "CHVIEWER_TEST_TOKEN"
 clickhouse:
-  addr: ["localhost:8443"]
+  addr: ["localhost:9440"]
   tls: "$1"
   ca_cert: [${2:-}]
   user: "default"
@@ -158,7 +161,7 @@ curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/x-w
 check "запрос без JSON-заголовка отклонён" $?
 
 echo "=== 12. Ошибочные сценарии ==="
-api POST /api/query '{"sql":"SELECT * FROM нет_такой_таблицы FORMAT JSON"}' | grep -qi 'error'
+api POST /api/query '{"sql":"SELECT * FROM нет_такой_таблицы"}' | grep -qi 'error'
 check "несуществующая таблица -> ошибка" $?
 api POST /api/objects '{"table":"","geo":"","bbox":[1,2,3,4]}' | grep -qi 'error'
 check "пустая таблица в запросе -> ошибка" $?

@@ -276,18 +276,18 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("QUERY -> %s | полный SQL:\n%s", s.ch.Addrs(), q.SQL)
 	start := time.Now()
-	body, err := s.ch.Do(r.Context(), q.SQL)
+	rows, err := s.ch.Query(r.Context(), q.SQL)
 	dur := time.Since(start).Round(time.Millisecond)
 	if err != nil {
 		log.Printf("ERROR QUERY за %s: %s", dur, trimSQL(err.Error(), 500))
 		writeErr(w, err.Error())
 		return
 	}
-	log.Printf("QUERY OK: %d байт за %s", len(body), dur)
-	// ответ ClickHouse — данные, не документ: вместе с nosniff это не даёт
-	// браузеру истолковать его как страницу
+	log.Printf("QUERY OK: %d строк за %s", len(rows), dur)
+	// ответ — данные, не документ: вместе с nosniff это не даёт браузеру
+	// истолковать его как страницу
 	w.Header().Set("Content-Disposition", "attachment")
-	w.Write(body)
+	writeJSON(w, http.StatusOK, map[string]any{"rows": len(rows), "data": rows})
 }
 
 // ---------- объекты с кэшем на стороне сервера ----------
@@ -366,26 +366,18 @@ FROM %s
 WHERE arrayMin(xs) <= %g AND arrayMax(xs) >= %g
   AND arrayMin(ys) <= %g AND arrayMax(ys) >= %g
   %s
-LIMIT %d
-FORMAT JSON`, geo, geo, table, req.E, req.W, req.N, req.S, skip, q.Limit)
+LIMIT %d`, geo, geo, table, req.E, req.W, req.N, req.S, skip, q.Limit)
 
 		log.Printf("OBJECTS | кэш: %d объектов, %d областей | полный SQL:\n%s",
 			len(cache.objs), len(cache.rects), usedSQL)
 
-		body, err := s.ch.Do(r.Context(), usedSQL)
+		data, err := s.ch.Query(r.Context(), usedSQL)
 		if err != nil {
 			writeErrSQL(w, err.Error(), usedSQL)
 			return
 		}
-		var parsed struct {
-			Data []map[string]any `json:"data"`
-		}
-		if err := json.Unmarshal(body, &parsed); err != nil {
-			writeErrSQL(w, "не удалось разобрать ответ ClickHouse: "+err.Error(), usedSQL)
-			return
-		}
 		added := 0
-		for _, row := range parsed.Data {
+		for _, row := range data {
 			id, _ := row["__id"].(string)
 			if id == "" {
 				id = fmt.Sprint(row["__id"])
@@ -401,7 +393,7 @@ FORMAT JSON`, geo, geo, table, req.E, req.W, req.N, req.S, skip, q.Limit)
 			added++
 		}
 		// область считаем покрытой, только если лимит не отрезал хвост
-		if len(parsed.Data) < q.Limit {
+		if len(data) < q.Limit {
 			already := false
 			for _, c := range cache.rects {
 				if c.contains(req) && c.minDeg <= q.MinDeg*1.0001 {
@@ -461,28 +453,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// структура таблицы: ищем по всем колонкам, кроме геометрии
-	descSQL := "DESCRIBE TABLE " + q.Table + " FORMAT JSON"
-	descBody, err := s.ch.Do(r.Context(), descSQL)
+	descSQL := "DESCRIBE TABLE " + q.Table
+	desc, err := s.ch.Query(r.Context(), descSQL)
 	if err != nil {
 		writeErrSQL(w, err.Error(), descSQL)
 		return
 	}
-	var desc struct {
-		Data []struct {
-			Name string `json:"name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(descBody, &desc); err != nil {
-		writeErrSQL(w, "не удалось разобрать DESCRIBE: "+err.Error(), descSQL)
-		return
-	}
 	var cols, strs []string
-	for _, c := range desc.Data {
-		if c.Name == q.Geo {
+	for _, c := range desc {
+		name, _ := c["name"].(string)
+		if name == "" || name == q.Geo {
 			continue
 		}
-		cols = append(cols, sqlIdent(c.Name))
-		strs = append(strs, "toString("+sqlIdent(c.Name)+")")
+		cols = append(cols, sqlIdent(name))
+		strs = append(strs, "toString("+sqlIdent(name)+")")
 	}
 	if len(cols) == 0 {
 		writeErrSQL(w, "в таблице нет колонок для поиска (кроме геометрии)", "")
@@ -499,25 +483,17 @@ SELECT %s,
   arrayMin(xs) AS __w, arrayMax(xs) AS __e, arrayMin(ys) AS __s, arrayMax(ys) AS __n
 FROM %s
 WHERE positionCaseInsensitiveUTF8(arrayStringConcat([%s], ' '), '%s') > 0
-LIMIT %d
-FORMAT JSON`,
+LIMIT %d`,
 		geo, strings.Join(cols, ", "), geo, q.Table, strings.Join(strs, ", "), esc, q.Limit)
 
 	log.Printf("SEARCH | таблица %s | запрос %q", q.Table, q.Query)
-	body, err := s.ch.Do(r.Context(), sql)
+	data, err := s.ch.Query(r.Context(), sql)
 	if err != nil {
 		writeErrSQL(w, err.Error(), sql)
 		return
 	}
-	var parsed struct {
-		Data []map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		writeErrSQL(w, "не удалось разобрать ответ ClickHouse: "+err.Error(), sql)
-		return
-	}
-	log.Printf("SEARCH OK: %d совпадений в %s", len(parsed.Data), q.Table)
-	writeJSON(w, http.StatusOK, map[string]any{"rows": len(parsed.Data), "sql": sql, "data": parsed.Data})
+	log.Printf("SEARCH OK: %d совпадений в %s", len(data), q.Table)
+	writeJSON(w, http.StatusOK, map[string]any{"rows": len(data), "sql": sql, "data": data})
 }
 
 // Run поднимает HTTP(S)-сервер и корректно останавливает его по сигналу.

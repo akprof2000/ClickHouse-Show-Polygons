@@ -5,10 +5,10 @@
 [![последний релиз](https://img.shields.io/github/v/release/akprof2000/ClickHouse-Show-Polygons?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
 [![скачивания](https://img.shields.io/github/downloads/akprof2000/ClickHouse-Show-Polygons/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases)
 [![лицензия MIT](https://img.shields.io/github/license/akprof2000/ClickHouse-Show-Polygons?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F)](LICENSE)
-[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-39%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
+[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-40%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Linux](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Linux%20%2F%20CentOS%209-262577?logo=linux&logoColor=white)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
-[![ClickHouse](https://img.shields.io/badge/ClickHouse-8123%20%2F%208443-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com)
+[![ClickHouse](https://img.shields.io/badge/ClickHouse-native%209000%20%2F%209440-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com)
 [![MapLibre GL](https://img.shields.io/badge/MapLibre%20GL-WebGL-396CB2)](https://maplibre.org)
 [![H3](https://img.shields.io/badge/H3-%D0%B3%D0%B5%D0%BA%D1%81%D0%B0%D0%B3%D0%BE%D0%BD%D1%8B-1565c0)](https://github.com/akprof2000/Demo-H3-Hex)
 [![PAM](https://img.shields.io/badge/PAM-AAPM-6f42c1)](https://github.com/akprof2000/pam-client)
@@ -111,7 +111,7 @@ sudo firewall-cmd --permanent --add-port=8081/tcp && sudo firewall-cmd --reload
 и запускает сервер; дальше правьте уже сам YAML.
 
 ```bash
-CH_ADDR=clickhouse:8123 CH_PASSWORD=секрет CHVIEWER_TOKEN=токен ./serve.sh
+CH_ADDR=clickhouse:9000 CH_PASSWORD=секрет CHVIEWER_TOKEN=токен ./serve.sh
 
 # или с получением логина и пароля из PAM
 PAM_SERVER=https://pam.example.com PAM_TOKEN=aapm-токен PAM_SECRET=/Инфраструктура/ClickHouse/viewer CHVIEWER_TOKEN=токен ./serve.sh
@@ -128,7 +128,7 @@ auth:
   token_env: "CHVIEWER_TOKEN"   # токен доступа к странице — из окружения
 
 clickhouse:
-  addr: ["ch1.example.com:8443", "ch2.example.com:8443"]  # можно несколько
+  addr: ["ch1.example.com:9440", "ch2.example.com:9440"]  # можно несколько
   database: "default"           # база по умолчанию: слои можно писать без префикса
   pam:
     secret: "/Инфраструктура/ClickHouse/viewer"
@@ -143,9 +143,9 @@ clickhouse:
 
 | Поле | Что задаёт |
 | --- | --- |
-| `addr` | список `host:port` HTTP-интерфейса. Порт можно не писать: 8123 без TLS, 8443 с ним. Адреса пробуются по очереди, начиная с последнего удачного |
+| `addr` | список `host:port` native-протокола. Порт можно не писать: 9000 без TLS, 9440 с ним. Живой узел выбирает сам драйвер |
 | `database` | база по умолчанию — в слоях достаточно имени таблицы без префикса |
-| `tls` | `off` — обычный HTTP; `on` — HTTPS с системными корнями; `ca` — HTTPS с доверием сертификатам из `ca_cert`; `insecure` — HTTPS без проверки (только стенд) |
+| `tls` | `off` — обычное соединение; `on` — TLS с системными корнями; `ca` — TLS с доверием сертификатам из `ca_cert`; `insecure` — TLS без проверки (только стенд) |
 | `ca_cert` | PEM-файлы корневых сертификатов для режима `ca` |
 | `tls_cert`, `tls_key` | клиентский сертификат и ключ для взаимного TLS |
 | `user`, `password_env` | вход логином и паролем из переменной окружения |
@@ -240,14 +240,14 @@ flowchart LR
 flowchart LR
     B["🌐 Браузер<br/>MapLibre GL (WebGL)<br/>слои · сетка H3 · поиск"]
     E["⚙️ chviewer<br/>:8081 · служба systemd<br/>вход · кэш · шаблоны"]
-    CH[("🗄️ ClickHouse<br/>http 8123 / https 8443")]
+    CH[("🗄️ ClickHouse<br/>native 9000 / TLS 9440")]
     P["🔐 PAM (AAPM)<br/>логин и пароль ClickHouse"]
     T["📁 data_dir/templates<br/>общие шаблоны слоёв"]
     OSM["🗺️ tile.openstreetmap.org"]
 
     B -- "токен доступа, bbox экрана" --> E
     E -- "GeoJSON-объекты" --> B
-    E -- "SQL (FORMAT JSON)" --> CH
+    E -- "SQL (native, clickhouse-go)" --> CH
     CH -- "строки + типы" --> E
     E -- "путь записи + AAPM-токен" --> P
     P -- "логин и пароль" --> E
@@ -260,7 +260,7 @@ flowchart LR
 | Задача | Как решает сервер |
 | --- | --- |
 | **Пароль базы не должен попадать к пользователю** | учётные данные берутся из PAM и не покидают сервер |
-| **CORS** — браузер запрещает запросы к чужому хосту | страница ходит только к своему серверу, к ClickHouse ходит Go |
+| **CORS** — браузер запрещает запросы к чужому хосту | страница ходит только к своему серверу, к ClickHouse ходит Go по native-протоколу |
 | **Самоподписанный SSL** — браузер молча блокирует | Go-клиент проверяет сертификат или пропускает по настройке |
 | **Повторные запросы** — каждый сдвиг карты дёргал бы БД | кэш в памяти сервера отвечает сам, и он общий для всех |
 | **Настройки у каждого свои** | шаблоны слоёв лежат на сервере и видны всем |
@@ -298,13 +298,14 @@ WHERE arrayMin(xs) <= 37.9 AND arrayMax(xs) >= 37.4      -- пересечени
   AND NOT (...)                                           -- минус покрытые территории
   AND (arrayMax(xs)-arrayMin(xs) >= 0.0012 OR ...)        -- минус слишком мелкие
 LIMIT 30000
-FORMAT JSON
 ```
 
-Координаты `MultiPolygon` в `FORMAT JSON` приходят готовыми вложенными массивами
-`[долгота, широта]` — они без преобразований подставляются в GeoJSON.
-Идентификатор объекта — `cityHash64` от геометрии, поэтому таблице не нужна
-колонка-ключ.
+Запрос идёт через официальный драйвер `clickhouse-go` по native-протоколу, и
+`MultiPolygon` приходит типизированным значением, которое сервер раскладывает
+в массивы `[долгота, широта]` для GeoJSON — ровно так, как их ждёт карта.
+64-битные целые отдаются браузеру строками: в JavaScript число больше 2^53
+теряет точность, а это идентификатор объекта. Сам идентификатор —
+`cityHash64` от геометрии, поэтому таблице не нужна колонка-ключ.
 
 ---
 
@@ -476,7 +477,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o chviewer .
 ├── main.go                  # запуск: флаги, проверка конфигурации, сигналы
 ├── config.go                # YAML-конфигурация и пример к ней
 ├── pamauth.go               # логин и пароль ClickHouse из PAM (AAPM)
-├── chclient.go              # клиент ClickHouse с повтором при смене пароля
+├── chclient.go              # клиент ClickHouse (clickhouse-go, native)
+├── rows.go                  # строки драйвера -> значения для JSON и геометрии
 ├── server.go                # HTTP: вход, слои, поиск, шаблоны
 ├── templates.go             # общие шаблоны слоёв на сервере
 ├── cache.go                 # кэш территорий и охваты полигонов
@@ -487,7 +489,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o chviewer .
 ├── scripts/launch/serve.sh  # настройка и запуск, создаёт chviewer.yaml
 ├── scripts/systemd/         # юнит для CentOS 9 / RHEL 9
 ├── build.sh                 # сборка фронта + бинарника
-├── test.sh                  # 39 автотестов
+├── test.sh                  # 40 автотестов
 ├── testenv/setup.sql        # тестовые таблицы для стенда
 ├── VERSION                  # версия, вшивается в бинарник
 └── .github/workflows/release.yml   # релиз по тегу или вручную
@@ -541,8 +543,8 @@ flowchart LR
 
 ## Тестовый стенд и автотесты
 
-Для разработки есть одноразовый стенд в Docker: ClickHouse с http (8123) и
-https (8443, самоподписанный сертификат), две тестовые таблицы с разной
+Для разработки есть одноразовый стенд в Docker: ClickHouse с native (9000) и
+native+TLS (9440, самоподписанный сертификат), две тестовые таблицы с разной
 структурой (200 + 80 полигонов в районе Москвы, кириллические атрибуты).
 
 Проверить работу именно в серверном окружении можно там же, в контейнере
@@ -551,7 +553,7 @@ CentOS — так отлаживалась и текущая версия:
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist-linux/chviewer .
 cp scripts/launch/serve.sh dist-linux/
-docker run -d --name chviewer -p 8081:8081   -e CH_ADDR=host.docker.internal:8123 -e CH_PASSWORD=test123   -e CHVIEWER_TOKEN=токен -e DATA_DIR=/var/lib/chviewer   --add-host=host.docker.internal:host-gateway   -v "$PWD/dist-linux:/opt/chviewer" -w /opt/chviewer   quay.io/centos/centos:stream9 ./serve.sh
+docker run -d --name chviewer -p 8081:8081   -e CH_ADDR=host.docker.internal:9000 -e CH_PASSWORD=test123   -e CHVIEWER_TOKEN=токен -e DATA_DIR=/var/lib/chviewer   --add-host=host.docker.internal:host-gateway   -v "$PWD/dist-linux:/opt/chviewer" -w /opt/chviewer   quay.io/centos/centos:stream9 ./serve.sh
 ```
 
 ```bash
@@ -560,7 +562,7 @@ openssl req -x509 -newkey rsa:2048 -keyout testenv/server.key -out testenv/serve
   -days 365 -nodes -subj "//CN=localhost"   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 # контейнер
-docker run -d --name ch-test -p 8123:8123 -p 8443:8443 \
+docker run -d --name ch-test -p 8123:8123 -p 8443:8443 -p 9000:9000 -p 9440:9440 \
   -e CLICKHOUSE_PASSWORD=test123 \
   -v "$PWD/testenv/ssl.xml:/etc/clickhouse-server/config.d/ssl.xml:ro" \
   -v "$PWD/testenv/server.crt:/etc/clickhouse-server/certs/server.crt:ro" \
@@ -570,7 +572,7 @@ docker run -d --name ch-test -p 8123:8123 -p 8443:8443 \
 # тестовые данные
 docker exec -i ch-test clickhouse-client --password test123 --multiquery < testenv/setup.sql
 
-# 39 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
+# 40 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
 # шаблоны, режимы TLS с сертификатами, защита от межсайтовых запросов, ошибки
 bash test.sh
 ```

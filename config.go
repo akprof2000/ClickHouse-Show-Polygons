@@ -62,8 +62,8 @@ type AuthConfig struct {
 // режимом tls, логин и пароль берутся из PAM (если задан pam.secret) либо из
 // user + password_env.
 type CHConfig struct {
-	// Addr — host:port HTTP-интерфейса ClickHouse (8123 без TLS, 8443 с TLS).
-	// Можно несколько: сервер пробует их по очереди, пока кто-то не ответит.
+	// Addr — host:port native-протокола ClickHouse (9000 без TLS, 9440 с TLS).
+	// Можно несколько: драйвер сам выбирает живой узел.
 	Addr     []string `yaml:"addr"`
 	Database string   `yaml:"database"`
 
@@ -71,10 +71,10 @@ type CHConfig struct {
 	PasswordEnv string `yaml:"password_env"`
 
 	// TLS — off | on | ca | insecure (как в mrr2h3):
-	//   off      — обычный HTTP;
-	//   on       — HTTPS с системными корневыми сертификатами;
-	//   ca       — HTTPS с доверием сертификатам из ca_cert;
-	//   insecure — HTTPS без проверки сертификата (только стенд).
+	//   off      — обычное соединение;
+	//   on       — TLS с системными корневыми сертификатами;
+	//   ca       — TLS с доверием сертификатам из ca_cert;
+	//   insecure — TLS без проверки сертификата (только стенд).
 	TLS     string   `yaml:"tls"`
 	CACert  []string `yaml:"ca_cert"`
 	TLSCert string   `yaml:"tls_cert"` // взаимный TLS: клиентский сертификат
@@ -102,24 +102,17 @@ func (c CHConfig) Mode() TLSMode {
 	return TLSMode(strings.ToLower(strings.TrimSpace(c.TLS)))
 }
 
-// Scheme и DefaultPort: по HTTP-интерфейсу ClickHouse слушает 8123, по
-// HTTPS — 8443. Порт из addr, если он там указан, всегда важнее.
-func (c CHConfig) Scheme() string {
-	if c.Mode() == TLSOff {
-		return "http"
-	}
-	return "https"
-}
-
+// defaultPort: native-протокол ClickHouse слушает 9000, с TLS — 9440.
+// Порт, указанный в addr, всегда важнее.
 func (c CHConfig) defaultPort() string {
 	if c.Mode() == TLSOff {
-		return "8123"
+		return "9000"
 	}
-	return "8443"
+	return "9440"
 }
 
-// Endpoints превращает addr в полные адреса запросов.
-func (c CHConfig) Endpoints() []string {
+// AddrList приводит addr к виду host:port, подставляя порт по режиму TLS.
+func (c CHConfig) AddrList() []string {
 	out := make([]string, 0, len(c.Addr))
 	for _, a := range c.Addr {
 		a = strings.TrimSpace(a)
@@ -129,7 +122,7 @@ func (c CHConfig) Endpoints() []string {
 		if !strings.Contains(a, ":") {
 			a += ":" + c.defaultPort()
 		}
-		out = append(out, c.Scheme()+"://"+a+"/")
+		out = append(out, a)
 	}
 	return out
 }
@@ -212,7 +205,7 @@ func defaultConfig() Config {
 		DataDir: "./data",
 		Auth:    AuthConfig{TokenEnv: "CHVIEWER_TOKEN"},
 		ClickHouse: CHConfig{
-			Addr:     []string{"localhost:8123"},
+			Addr:     []string{"localhost:9000"},
 			Database: "default",
 			TLS:      string(TLSOff),
 			Timeout:  Duration(120 * time.Second),
@@ -250,7 +243,7 @@ func (c *Config) normalize() error {
 	}
 	c.DataDir = abs
 
-	if len(c.ClickHouse.Endpoints()) == 0 {
+	if len(c.ClickHouse.AddrList()) == 0 {
 		return fmt.Errorf("clickhouse.addr: укажите хотя бы один адрес host:port")
 	}
 	if _, err := c.ClickHouse.TLSConfig(); err != nil {
@@ -300,8 +293,8 @@ auth:
 # Куда ходить за полигонами. Браузер этих данных не получает.
 # Набор настроек такой же, как в проекте mrr2h3.
 clickhouse:
-  addr: ["clickhouse.example.com:8123"]  # host:port HTTP-интерфейса (8443 при TLS);
-                                         # можно несколько — пробуются по очереди
+  addr: ["clickhouse.example.com:9000"]  # host:port native-протокола (9440 при TLS);
+                                         # можно несколько — драйвер выберет живой
   database: "default"     # база по умолчанию: слои можно писать без префикса "база."
   timeout: 120s
 
@@ -325,10 +318,10 @@ clickhouse:
     ttl: 10m                    # сколько держать полученный пароль в памяти
 
   # Защита соединения с ClickHouse:
-  #   off      — обычный HTTP (порт 8123 по умолчанию);
-  #   on       — HTTPS с системными корневыми сертификатами (8443);
-  #   ca       — HTTPS с доверием сертификатам из ca_cert;
-  #   insecure — HTTPS без проверки сертификата (только стенд).
+  #   off      — обычное соединение (порт 9000 по умолчанию);
+  #   on       — TLS с системными корневыми сертификатами (9440);
+  #   ca       — TLS с доверием сертификатам из ca_cert;
+  #   insecure — TLS без проверки сертификата (только стенд).
   tls: "off"
   ca_cert: []             # ["/etc/ssl/ch-ca.pem"] для tls: ca
   tls_cert: ""            # клиентский сертификат (взаимный TLS)

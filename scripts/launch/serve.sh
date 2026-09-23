@@ -28,7 +28,7 @@ HTTPS_CERT="${HTTPS_CERT:-}"                  # /etc/pki/tls/certs/chviewer.pem
 HTTPS_KEY="${HTTPS_KEY:-}"                    # /etc/pki/tls/private/chviewer.key
 
 # --- ClickHouse -------------------------------------------------------------
-CH_ADDR="${CH_ADDR:-localhost:8123}"          # host:port HTTP-интерфейса (8443 при TLS)
+CH_ADDR="${CH_ADDR:-localhost:9000}"          # host:port native-протокола (9440 при TLS)
 CH_DATABASE="${CH_DATABASE:-default}"         # база по умолчанию для слоёв
 CH_TIMEOUT="${CH_TIMEOUT:-120s}"
 CH_USER="${CH_USER:-default}"
@@ -46,6 +46,7 @@ PAM_INSECURE="${PAM_INSECURE:-false}"
 PAM_TIMEOUT="${PAM_TIMEOUT:-10s}"
 PAM_TTL="${PAM_TTL:-10m}"
 # защита соединения с ClickHouse: off | on | ca | insecure
+# (on/ca/insecure переводят подключение на порт 9440)
 CH_TLS="${CH_TLS:-off}"
 CA_CERT="${CA_CERT:-}"                        # /etc/ssl/ch-ca.pem (для CH_TLS=ca)
 TLS_CERT="${TLS_CERT:-}"                      # клиентский сертификат (взаимный TLS)

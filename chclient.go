@@ -1,125 +1,169 @@
 package main
 
-// Клиент ClickHouse. Адрес, режим TLS и сертификаты берутся из конфигурации
-// сервера, логин и пароль — у источника учётных данных (PAM или окружение).
-// Браузер в этом не участвует.
+// Клиент ClickHouse на официальном драйвере clickhouse-go (native-протокол,
+// порт 9000, при TLS 9440) — тот же, что в проекте mrr2h3. Адрес, режим TLS и
+// сертификаты берутся из конфигурации сервера, логин и пароль — у источника
+// учётных данных (PAM или окружение). Браузер в этом не участвует.
+//
+// Соединение живёт вместе с учётными данными: пароль в драйвере задаётся при
+// открытии, поэтому при смене пароля в PAM соединение переоткрывается. Ошибки
+// аутентификации ClickHouse (192, 193, 516) распознаются отдельно: кэш PAM
+// сбрасывается и запрос повторяется один раз.
 
 import (
 	"context"
+	"crypto/tls"
+	"errors"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/url"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// maxResponse — предел ответа ClickHouse, который мы готовы прочитать.
-const maxResponse = 200 << 20
-
 type chClient struct {
-	endpoints []string
-	database  string
-	creds     Credentials
-	http      *http.Client
+	addr     []string
+	database string
+	tls      *tls.Config
+	creds    Credentials
+	timeout  time.Duration
 
-	mu   sync.Mutex
-	next int // с какого адреса начинать: последний удачный
+	mu       sync.Mutex
+	conn     driver.Conn
+	connUser string // под каким логином открыто текущее соединение
+	connPass string
 }
 
 func newCHClient(c CHConfig, creds Credentials) (*chClient, error) {
-	tlsCfg, err := c.TLSConfig()
+	cfg, err := c.TLSConfig()
 	if err != nil {
 		return nil, err
 	}
 	return &chClient{
-		endpoints: c.Endpoints(),
-		database:  strings.TrimSpace(c.Database),
-		creds:     creds,
-		http: &http.Client{
-			Timeout:   c.Timeout.D(),
-			Transport: &http.Transport{TLSClientConfig: tlsCfg},
-		},
+		addr:     c.AddrList(),
+		database: strings.TrimSpace(c.Database),
+		tls:      cfg,
+		creds:    creds,
+		timeout:  c.Timeout.D(),
 	}, nil
 }
 
 // Addrs — адреса для журнала и страницы сведений.
-func (c *chClient) Addrs() string { return strings.Join(c.endpoints, ", ") }
+func (c *chClient) Addrs() string { return strings.Join(c.addr, ", ") }
 
-// Do выполняет SQL. Адреса перебираются по очереди, начиная с последнего
-// удачного: недоступный узел не должен ронять запрос, если есть живой.
-// Если ClickHouse отверг пароль, учётные данные считаются устаревшими
-// (в PAM сменили пароль): сбрасываем кэш и пробуем ещё раз.
-func (c *chClient) Do(ctx context.Context, sql string) ([]byte, error) {
-	body, status, err := c.try(ctx, sql)
+// Close закрывает соединение при остановке службы.
+func (c *chClient) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return nil
+	}
+	err := c.conn.Close()
+	c.conn = nil
+	return err
+}
+
+// connect возвращает соединение, открывая новое, если учётные данные
+// изменились (в PAM сменили пароль) или его ещё нет.
+func (c *chClient) connect(ctx context.Context) (driver.Conn, error) {
+	user, password, err := c.creds.Get(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		c.creds.Invalidate()
-		body, status, err = c.try(ctx, sql)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if status != http.StatusOK {
-		return nil, fmt.Errorf("%s", string(body))
-	}
-	return body, nil
-}
-
-// try обходит адреса, пока один не ответит хоть чем-то по сети.
-func (c *chClient) try(ctx context.Context, sql string) ([]byte, int, error) {
 	c.mu.Lock()
-	start := c.next
-	c.mu.Unlock()
-
-	var lastErr error
-	for i := range c.endpoints {
-		idx := (start + i) % len(c.endpoints)
-		body, status, err := c.once(ctx, c.endpoints[idx], sql)
-		if err == nil {
-			c.mu.Lock()
-			c.next = idx
-			c.mu.Unlock()
-			return body, status, nil
-		}
-		lastErr = err
-		if len(c.endpoints) > 1 {
-			log.Printf("WARN ClickHouse %s недоступен: %v", c.endpoints[idx], err)
-		}
+	defer c.mu.Unlock()
+	if c.conn != nil && c.connUser == user && c.connPass == password {
+		return c.conn, nil
 	}
-	return nil, 0, lastErr
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: c.addr,
+		Auth: clickhouse.Auth{Database: c.database, Username: user, Password: password},
+		TLS:  c.tls,
+		// пул небольшой: запросы короткие, а карта дёргает сервер пачками
+		MaxOpenConns: 8,
+		MaxIdleConns: 4,
+		DialTimeout:  10 * time.Second,
+		ReadTimeout:  c.timeout,
+		Compression:  &clickhouse.Compression{Method: clickhouse.CompressionLZ4},
+		ClientInfo:   clickhouse.ClientInfo{Products: []struct{ Name, Version string }{{Name: "chviewer", Version: version}}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("подключение к ClickHouse: %w", err)
+	}
+	c.conn, c.connUser, c.connPass = conn, user, password
+	return conn, nil
 }
 
-func (c *chClient) once(ctx context.Context, endpoint, sql string) ([]byte, int, error) {
-	user, password, err := c.creds.Get(ctx)
+// authFailed сообщает, что сервер отверг учётные данные: UNKNOWN_USER (192),
+// WRONG_PASSWORD (193), AUTHENTICATION_FAILED (516).
+func authFailed(err error) bool {
+	var ex *clickhouse.Exception
+	if errors.As(err, &ex) {
+		switch ex.Code {
+		case 192, 193, 516:
+			return true
+		}
+	}
+	return false
+}
+
+// Query выполняет SELECT и отдаёт строки в виде, пригодном для JSON.
+func (c *chClient) Query(ctx context.Context, sql string) ([]map[string]any, error) {
+	rows, err := c.query(ctx, sql)
+	if err != nil && authFailed(err) {
+		// пароль сменили после выдачи: сбрасываем кэш и пробуем ещё раз
+		c.creds.Invalidate()
+		c.mu.Lock()
+		if c.conn != nil {
+			c.conn.Close()
+			c.conn = nil
+		}
+		c.mu.Unlock()
+		rows, err = c.query(ctx, sql)
+	}
+	return rows, err
+}
+
+func (c *chClient) query(ctx context.Context, sql string) ([]map[string]any, error) {
+	conn, err := c.connect(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	u := endpoint
-	if c.database != "" {
-		// база по умолчанию: слои можно писать без префикса "база."
-		q := url.Values{"database": {c.database}}
-		u += "?" + q.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(sql))
+	rows, err := conn.Query(ctx, sql)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
-	req.Header.Set("X-ClickHouse-User", user)
-	req.Header.Set("X-ClickHouse-Key", password)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, 0, fmt.Errorf("соединение с ClickHouse не удалось: %w", err)
+	defer rows.Close()
+
+	cols := rows.Columns()
+	types := rows.ColumnTypes()
+	out := make([]map[string]any, 0, 256)
+	for rows.Next() {
+		// приёмники создаём по типам колонок: запрос произвольный, заранее
+		// структуру строки мы не знаем
+		dest := make([]any, len(cols))
+		for i, t := range types {
+			dest[i] = reflectNew(t.ScanType())
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, fmt.Errorf("чтение строки: %w", err)
+		}
+		row := make(map[string]any, len(cols))
+		for i, name := range cols {
+			row[name] = jsonValue(derefAny(dest[i]))
+		}
+		out = append(out, row)
 	}
-	defer resp.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
-	if readErr != nil {
-		return nil, resp.StatusCode, fmt.Errorf("ответ ClickHouse оборвался после %d байт: %w", len(body), readErr)
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
-	return body, resp.StatusCode, nil
+	return out, nil
 }
 
 // Check проверяет связку «конфиг + учётные данные» при запуске: понятная
@@ -129,7 +173,7 @@ func (c *chClient) Check(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := c.Do(ctx, "SELECT 1 FORMAT JSON"); err != nil {
+	if _, err := c.Query(ctx, "SELECT 1"); err != nil {
 		return user, err
 	}
 	return user, nil
