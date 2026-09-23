@@ -1,10 +1,14 @@
-# Проверка сборки на каждый push: фронтенд (esbuild) + бэкенд (go vet, go build)
+# Проверка на каждый push и pull request: сборка под Linux и Windows плюс
+# полный прогон test.sh против настоящего ClickHouse в контейнере.
+# Этот же workflow вызывается из release.yml — релиз не выходит, пока тесты
+# не прошли.
 name: build
 
 on:
   push:
     branches: ['**']
   pull_request:
+  workflow_call:
 
 jobs:
   build:
@@ -12,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          submodules: recursive
+          submodules: recursive   # web/vendor/Demo-H3-Hex — сетка H3
 
       - uses: actions/setup-node@v7
         with:
@@ -46,3 +50,38 @@ jobs:
           go vet ./...
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o chviewer .
           GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o chviewer.exe .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # бинарник встраивает web/dist, поэтому фронтенд нужен и для тестов
+      - name: Сборка фронтенда
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          cp index.html dist/
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Тестовый ClickHouse (native 9000, native+TLS 9440)
+        run: bash testenv/up.sh
+
+      - name: Автотесты
+        run: bash test.sh
+
+      - name: Журнал ClickHouse при падении
+        if: failure()
+        run: docker logs --tail 80 ch-test

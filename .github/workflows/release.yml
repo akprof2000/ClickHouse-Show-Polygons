@@ -1,13 +1,24 @@
-# Релиз серверного приложения: основной артефакт — tar.gz под Linux (CentOS 9
-# и совместимые) со скриптом запуска и systemd-юнитом; дополнительно zip под
-# Windows для локального запуска. MSI-инсталлятора больше нет: он ставил
-# настольную версию с ярлыками, а служба так не разворачивается.
-# Запускается по тегу vX.Y.Z либо вручную (Actions → release → Run workflow),
-# при ручном запуске тег создаётся сам из файла VERSION.
+# Релиз серверного приложения.
+#
+# Как выпустить версию — одним из трёх способов:
+#   1. Поменять файл VERSION и запушить в master. Релиз vX.Y.Z соберётся сам;
+#      если такой тег уже есть, ничего не произойдёт (повторно не выпускаем).
+#   2. Запушить тег vX.Y.Z.
+#   3. Вручную: Actions → release → Run workflow (версия из поля или VERSION).
+#
+# Перед сборкой прогоняются все проверки из ci.yml, включая test.sh против
+# настоящего ClickHouse: релиз со сломанной логикой не выйдет.
+#
+# Артефакты: tar.gz под Linux (CentOS 9 и совместимые) со скриптом запуска,
+# systemd-юнитом и примером конфигурации; zip под Windows для локального
+# запуска; SHA256SUMS.txt для проверки скачанного на сервере.
+# Сколько релизов хранить, решает prune-releases.yml (три последних).
 name: release
 
 on:
   push:
+    branches: [master]
+    paths: [VERSION]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -19,30 +30,63 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build:
+  # решаем, выпускать ли вообще и какую версию
+  plan:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          submodules: recursive   # web/vendor/Demo-H3-Hex — сетка H3
 
-      - name: Версия и тег релиза
+      - id: v
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             VER="${GITHUB_REF_NAME#v}"
           elif [ -n "$INPUT_VERSION" ]; then
             VER="${INPUT_VERSION#v}"
           else
             VER="$(tr -d ' \t\r\n' < VERSION)"
           fi
-          echo "VER=$VER"   >> "$GITHUB_ENV"
-          echo "TAG=v$VER"  >> "$GITHUB_ENV"
+          if ! echo "$VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::версия «$VER» не похожа на X.Y.Z"
+            exit 1
+          fi
+          PUBLISH=true
+          # при смене VERSION в master: если релиз уже есть — не повторяем
+          if [ "$GITHUB_REF_TYPE" = "branch" ] && [ "$GITHUB_EVENT_NAME" = "push" ] &&
+             gh release view "v$VER" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::релиз v$VER уже существует — пропускаю"
+            PUBLISH=false
+          fi
+          echo "version=$VER"     >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "версия: $VER, выпускать: $PUBLISH"
+
+  test:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [plan, test]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      VER: ${{ needs.plan.outputs.version }}
+      TAG: v${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive   # web/vendor/Demo-H3-Hex — сетка H3
 
       - uses: actions/setup-node@v7
         with:
@@ -79,6 +123,9 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .
           zip -q "ClickHouse-Show-Polygons-$VER-windows-amd64.zip" chviewer.exe README.md LICENSE
 
+      - name: Контрольные суммы
+        run: sha256sum ClickHouse-Show-Polygons-*.tar.gz ClickHouse-Show-Polygons-*.zip > SHA256SUMS.txt
+
       - name: Публикация релиза
         uses: softprops/action-gh-release@v3
         with:
@@ -87,17 +134,5 @@ jobs:
           files: |
             ClickHouse-Show-Polygons-*-linux-amd64.tar.gz
             ClickHouse-Show-Polygons-*-windows-amd64.zip
+            SHA256SUMS.txt
           generate_release_notes: true
-
-      # храним только один релиз: все предыдущие (и их теги) удаляются
-      - name: Удаление старых релизов
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --json tagName -q '.[].tagName' |
-          while read -r tag; do
-            if [ "$tag" != "$TAG" ]; then
-              echo "удаляю релиз $tag"
-              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-            fi
-          done

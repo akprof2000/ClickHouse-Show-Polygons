@@ -546,49 +546,48 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o chviewer .
 
 ## Релизы
 
-Релиз собирается GitHub Actions. Основной артефакт — `tar.gz` под Linux
-(статический бинарник, `serve.sh`, systemd-юнит и пример конфигурации), плюс
-`zip` под Windows для локального запуска. MSI-инсталлятора больше нет: он ставил
-настольную версию с ярлыками, а служба так не разворачивается.
+Всё собирается в GitHub Actions — локально ничего собирать не нужно.
 
-Есть два способа запуска.
+| Workflow | Когда | Что делает |
+| --- | --- | --- |
+| `build` ([ci.yml](.github/workflows/ci.yml)) | каждый push и pull request | `npm audit`, сборка под Linux и Windows, `go vet`, а затем все автотесты `test.sh` против настоящего ClickHouse в контейнере |
+| `release` ([release.yml](.github/workflows/release.yml)) | смена `VERSION` в master, тег `vX.Y.Z` или кнопка | сначала те же проверки, что в `build`; только если они прошли — сборка и публикация релиза |
+| `Prune releases` | после каждого релиза и раз в неделю | хранит три последних релиза, более старые удаляет |
+| `Cleanup` | раз в сутки | убирает старые артефакты, кэши и журналы запусков |
 
-**По тегу** (как раньше):
-
-```bash
-git tag v1.0.3 && git push origin v1.0.3
-```
-
-**Вручную, без тега** — вкладка **Actions** → workflow **release** → **Run workflow**.
-Поле «Версия» можно оставить пустым: тогда версия берётся из файла `VERSION`,
-а тег `vX.Y.Z` создаётся самим релизом. То же самое из консоли:
+**Как выпустить версию** — поменять `VERSION` и запушить:
 
 ```bash
-gh workflow run release.yml                 # версия из файла VERSION
-gh workflow run release.yml -f version=1.0.3   # или явно
+printf '3.3.0' > VERSION && git commit -am "Версия 3.3.0" && git push
 ```
 
-В релиз попадают два файла:
+Тег `v3.3.0` и релиз появятся сами. Если релиз с такой версией уже есть,
+workflow ничего не делает — случайно выпустить одно и то же дважды нельзя.
+По-прежнему работают и ручной тег (`git push origin v3.3.0`), и кнопка
+**Actions → release → Run workflow**.
+
+В релиз попадают три файла:
 
 - **ClickHouse-Show-Polygons-X.Y.Z-linux-amd64.tar.gz** — основной артефакт:
   статический бинарник `chviewer`, скрипт `serve.sh`, systemd-юнит, пример
   конфигурации, README и лицензия. Работает на CentOS 9 и любом другом
   дистрибутиве: внешних зависимостей нет;
 - **ClickHouse-Show-Polygons-X.Y.Z-windows-amd64.zip** — тот же сервер под
-  Windows, для локального запуска и отладки.
+  Windows, для локального запуска и отладки;
+- **SHA256SUMS.txt** — контрольные суммы, чтобы проверить скачанное на сервере:
+
+```bash
+sha256sum -c SHA256SUMS.txt --ignore-missing
+```
 
 ```mermaid
 flowchart LR
-    T["git tag v2.0.0"] --> W["GitHub Actions<br/>(ubuntu-latest)"]
-    W --> N["npm ci + esbuild<br/>web/dist"]
-    N --> G["go build<br/>-X main.version=2.0.0"]
-    G --> L["tar.gz<br/>linux-amd64"]
-    G --> Z["zip<br/>windows-amd64"]
-    L --> R["📦 Release"]
-    Z --> R
+    V["VERSION в master<br/>или тег vX.Y.Z"] --> P["plan<br/>какую версию, не выпущена ли"]
+    P --> T["test<br/>npm audit · vet · сборка<br/>test.sh против ClickHouse"]
+    T --> B["release<br/>go build linux + windows"]
+    B --> R["📦 Release<br/>tar.gz · zip · SHA256SUMS"]
+    R --> X["Prune releases<br/>оставить 3 последних"]
 ```
-
----
 
 ## Тестовый стенд и автотесты
 
@@ -606,25 +605,15 @@ docker run -d --name chviewer -p 8081:8081   -e CH_ADDR=host.docker.internal:900
 ```
 
 ```bash
-# сертификат для https-порта
-openssl req -x509 -newkey rsa:2048 -keyout testenv/server.key -out testenv/server.crt \
-  -days 365 -nodes -subj "//CN=localhost"   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-
-# контейнер
-docker run -d --name ch-test -p 8123:8123 -p 8443:8443 -p 9000:9000 -p 9440:9440 \
-  -e CLICKHOUSE_PASSWORD=test123 \
-  -v "$PWD/testenv/ssl.xml:/etc/clickhouse-server/config.d/ssl.xml:ro" \
-  -v "$PWD/testenv/server.crt:/etc/clickhouse-server/certs/server.crt:ro" \
-  -v "$PWD/testenv/server.key:/etc/clickhouse-server/certs/server.key:ro" \
-  clickhouse/clickhouse-server:latest
-
-# тестовые данные
-docker exec -i ch-test clickhouse-client --password test123 --multiquery < testenv/setup.sql
+# сертификат, контейнер ch-test с native 9000 и native+TLS 9440, тестовые данные
+bash testenv/up.sh
 
 # 40 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
 # шаблоны, режимы TLS с сертификатами, защита от межсайтовых запросов, ошибки
 bash test.sh
 ```
+
+Тот же скрипт и те же тесты гоняет GitHub Actions на каждый push.
 
 ---
 

@@ -12,6 +12,17 @@ TOKEN="test-token-$$"
 CT="Content-Type: application/json"
 COOKIE=""                       # заполняется после входа
 
+# Тест гоняется и на Windows (git-bash), и в GitHub Actions на Linux
+if [ "${OS:-}" = "Windows_NT" ]; then BIN=./chviewer-test.exe; else BIN=./chviewer-test; fi
+APP_PID=""
+stop_server() {
+  [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
+  # на Windows kill по PID из MSYS не всегда достаёт до процесса Windows
+  command -v taskkill >/dev/null 2>&1 && taskkill //F //IM "$(basename "$BIN")" >/dev/null 2>&1
+  APP_PID=""
+  return 0
+}
+
 ok()   { PASS=$((PASS+1)); echo "  [OK]   $1"; }
 fail() { FAIL=$((FAIL+1)); echo "  [FAIL] $1"; }
 check() { if [ "$2" -eq 0 ]; then ok "$1"; else fail "$1"; fi; }
@@ -37,11 +48,11 @@ check "native+TLS 9440 слушает" $?
 
 echo "=== 2. Сборка ==="
 VER=$(tr -d ' \r\n' < VERSION)
-go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .; check "go build" $?
+go build -ldflags "-s -w -X main.version=$VER" -o "$BIN" .; check "go build" $?
 
 echo "=== 3. Конфигурация и запуск ==="
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+trap 'stop_server; rm -rf "$TMP"' EXIT
 # Go нужен windows-вид пути: для неё /tmp/x это C:\tmp\x,
 # а у MSYS тот же /tmp живёт в другом месте
 TMPW=$(cygpath -m "$TMP" 2>/dev/null || echo "$TMP")
@@ -59,15 +70,16 @@ clickhouse:
   user: "default"
   password_env: "CH_TEST_PASSWORD"
 YAML
-CH_TEST_PASSWORD=test123 ./chviewer.exe -config "$TMP/chviewer.yaml" -check >/dev/null 2>&1
+CH_TEST_PASSWORD=test123 "$BIN" -config "$TMP/chviewer.yaml" -check >/dev/null 2>&1
 check "-check проходит с верным паролем" $?
 
-CH_TEST_PASSWORD=wrong ./chviewer.exe -config "$TMP/chviewer.yaml" -check >/dev/null 2>&1
+CH_TEST_PASSWORD=wrong "$BIN" -config "$TMP/chviewer.yaml" -check >/dev/null 2>&1
 check "-check падает с неверным паролем" $((! $?))
 
-taskkill //F //IM chviewer.exe >/dev/null 2>&1; sleep 1
+stop_server; sleep 1
 CHVIEWER_TEST_TOKEN="$TOKEN" CH_TEST_PASSWORD=test123 \
-  ./chviewer.exe -config "$TMP/chviewer.yaml" >"$TMP/server.log" 2>&1 &
+  "$BIN" -config "$TMP/chviewer.yaml" >"$TMP/server.log" 2>&1 &
+APP_PID=$!
 for i in $(seq 1 20); do curl -s --max-time 2 "$APP/api/info" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -s "$APP/" | grep -q "ClickHouse Viewer"; check "страница отдаётся" $?
 curl -s "$APP/api/info" | grep -q '"auth":true'; check "/api/info сообщает, что нужен вход" $?
@@ -144,7 +156,7 @@ clickhouse:
   user: "default"
   password_env: "CH_TEST_PASSWORD"
 YAML
-  CH_TEST_PASSWORD=test123 ./chviewer.exe -config "$TMP/tls.yaml" -check >/dev/null 2>&1
+  CH_TEST_PASSWORD=test123 "$BIN" -config "$TMP/tls.yaml" -check >/dev/null 2>&1
 }
 chmode insecure; check "tls: insecure — соединение с самоподписанным сертификатом" $?
 chmode ca "\"$TMPW/server.crt\""; check "tls: ca — сертификат принят из ca_cert" $?
@@ -166,7 +178,8 @@ check "несуществующая таблица -> ошибка" $?
 api POST /api/objects '{"table":"","geo":"","bbox":[1,2,3,4]}' | grep -qi 'error'
 check "пустая таблица в запросе -> ошибка" $?
 
-taskkill //F //IM chviewer.exe >/dev/null 2>&1
+stop_server
+rm -f "$BIN"
 
 echo
 echo "================================"
