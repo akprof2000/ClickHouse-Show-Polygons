@@ -3,6 +3,7 @@
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { latLngToCell } from 'h3-js';
+import { reprojectedTiles } from './merc3395.js';
 // сетка H3 — компонент react-h3-map, подключён git-submodule'ом
 // (https://github.com/akprof2000/Demo-H3-Hex), используем его не-React части
 import { H3GridLayer } from './vendor/Demo-H3-Hex/src/H3GridLayer.ts';
@@ -49,12 +50,17 @@ let basemaps = [];
 let basemapIndex = 0;
 
 function basemapStyle(b) {
+  // Тайлы в EPSG:3395 (Яндекс) перепроецируются на лету в 3857, иначе
+  // подложка съедет относительно данных — см. merc3395.js
+  const tiles = String(b.projection) === '3395'
+    ? b.tiles.map(t => reprojectedTiles(maplibregl, t))
+    : b.tiles;
   return {
     version: 8,
     sources: {
       base: {
         type: 'raster',
-        tiles: b.tiles,
+        tiles,
         tileSize: b.tile_size || 256,
         maxzoom: b.max_zoom || 19,
         attribution: b.attribution || ''
@@ -461,16 +467,6 @@ function setBasemap(i, initial) {
   if (!b) return;
   basemapIndex = i;
   try { localStorage.setItem('basemap', b.name); } catch {}
-
-  // Яндекс отдаёт тайлы в эллипсоидальном меркаторе: подложка уедет
-  // относительно данных, и молчать об этом нельзя
-  const hint = $('basemapHint');
-  if (String(b.projection) === '3395') {
-    hint.textContent = 'Подложка в проекции EPSG:3395 — смещена относительно данных, тем сильнее, чем дальше от экватора.';
-    hint.style.display = '';
-  } else {
-    hint.style.display = 'none';
-  }
 
   if (initial && map.getSource('base')) {
     // стиль уже такой же — незачем пересобирать слои

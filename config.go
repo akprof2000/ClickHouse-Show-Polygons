@@ -54,8 +54,9 @@ type Config struct {
 }
 
 // Basemap — растровая подложка. Какие источники включать, решает
-// администратор: у Яндекса, 2ГИС и Google правила использования требуют
-// работать через их собственные API, поэтому по умолчанию они выключены.
+// администратор. У Яндекса, 2ГИС и Google правила использования требуют
+// работать через их собственные API — это вопрос договорённостей владельца,
+// а не кода: список можно переопределить в конфигурации.
 type Basemap struct {
 	Name        string   `yaml:"name" json:"name"`
 	Tiles       []string `yaml:"tiles" json:"tiles"`
@@ -63,12 +64,12 @@ type Basemap struct {
 	MaxZoom     int      `yaml:"max_zoom" json:"max_zoom"`
 	TileSize    int      `yaml:"tile_size" json:"tile_size"`
 	// Projection: "3857" (по умолчанию) или "3395" — эллипсоидальный
-	// меркатор, в котором отдаёт тайлы Яндекс. Подложка в 3395 смещается
-	// относительно данных, поэтому режим помечается в интерфейсе.
+	// меркатор, в котором отдаёт тайлы Яндекс. Такие тайлы браузер
+	// перепроецирует в 3857 на лету, чтобы подложка совпала с данными.
 	Projection string `yaml:"projection" json:"projection"`
 }
 
-// defaultBasemaps — то, что можно отдавать без отдельных договорённостей.
+// defaultBasemaps — набор по умолчанию.
 func defaultBasemaps() []Basemap {
 	return []Basemap{
 		{
@@ -76,6 +77,27 @@ func defaultBasemaps() []Basemap {
 			Tiles:       []string{"https://tile.openstreetmap.org/{z}/{x}/{y}.png"},
 			Attribution: "© OpenStreetMap contributors",
 			MaxZoom:     19,
+		},
+		{
+			// Яндекс отдаёт тайлы в EPSG:3395; браузер перепроецирует их в
+			// 3857 на лету (web/merc3395.js), иначе подложка съедет
+			Name:        "Яндекс",
+			Tiles:       []string{"https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU"},
+			Attribution: "© Яндекс",
+			MaxZoom:     20,
+			Projection:  "3395",
+		},
+		{
+			Name:        "2ГИС",
+			Tiles:       []string{"https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}"},
+			Attribution: "© 2ГИС",
+			MaxZoom:     19,
+		},
+		{
+			Name:        "Google",
+			Tiles:       []string{"https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"},
+			Attribution: "© Google",
+			MaxZoom:     20,
 		},
 		{
 			Name:        "OSM светлая (Carto)",
@@ -409,29 +431,19 @@ clickhouse:
   tls_cert: ""            # клиентский сертификат (взаимный TLS)
   tls_key: ""             # ключ клиентского сертификата
 
-# Подложки карты на выбор. Пусто = встроенный набор: OpenStreetMap, светлая и
-# тёмная Carto, спутник Esri, рельеф OpenTopoMap.
+# Подложки карты на выбор. Пусто = встроенный набор: OpenStreetMap, Яндекс,
+# 2ГИС, Google, светлая и тёмная Carto, спутник Esri, рельеф OpenTopoMap.
 #
-# Яндекс, 2ГИС и Google по своим правилам разрешают тайлы только через их
-# собственные API и SDK, поэтому здесь их нет. Если у вас есть договор или
-# внутренний прокси, добавьте их сами — примеры закомментированы.
+# Яндекс, 2ГИС и Google по своим правилам разрешают тайлы только через
+# собственные API и SDK — если это для вас важно, задайте список сами.
+# projection: "3395" — для источников в эллипсоидальном меркаторе (так отдаёт
+# Яндекс): браузер перепроецирует их на лету, иначе подложка съедет.
 basemaps: []
-#  - name: "OpenStreetMap"
-#    tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"]
-#    attribution: "© OpenStreetMap contributors"
-#    max_zoom: 19
 #  - name: "Яндекс"
 #    tiles: ["https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU"]
 #    attribution: "© Яндекс"
-#    projection: "3395"   # Яндекс отдаёт эллипсоидальный меркатор: подложка
-#                         # смещается относительно данных, тем сильнее, чем
-#                         # дальше от экватора
-#  - name: "2ГИС"
-#    tiles: ["https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}"]
-#    attribution: "© 2ГИС"
-#  - name: "Google"
-#    tiles: ["https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"]
-#    attribution: "© Google"
+#    max_zoom: 20
+#    projection: "3395"
 #  - name: "Свой тайл-сервер"
 #    tiles: ["https://tiles.corp.local/{z}/{x}/{y}.png"]
 #    attribution: "Внутренний тайл-сервер"
