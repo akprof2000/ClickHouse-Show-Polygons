@@ -1,0 +1,218 @@
+package main
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Конфигурация сервера. Всё, что раньше пользователь вводил в браузере
+// (адрес ClickHouse, логин, пароль), теперь задаётся здесь один раз
+// администратором: браузер этих данных не видит вообще.
+
+// Duration — time.Duration, который YAML умеет читать как "10s" или "10m".
+type Duration time.Duration
+
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	var s string
+	if err := n.Decode(&s); err != nil {
+		return err
+	}
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("некорректная длительность %q: %w", s, err)
+	}
+	*d = Duration(v)
+	return nil
+}
+
+func (d Duration) D() time.Duration { return time.Duration(d) }
+
+type Config struct {
+	// Listen — адрес сервера, например ":8081" или "127.0.0.1:8081".
+	Listen string `yaml:"listen"`
+	// Title — заголовок страницы.
+	Title string `yaml:"title"`
+	// DataDir — где лежат общие шаблоны слоёв.
+	DataDir string `yaml:"data_dir"`
+
+	Auth       AuthConfig `yaml:"auth"`
+	ClickHouse CHConfig   `yaml:"clickhouse"`
+	TLS        TLSConfig  `yaml:"tls"`
+}
+
+// AuthConfig — вход в веб-интерфейс. Токен спрашивается у пользователя один
+// раз и кладётся в cookie. Пустой токен = вход открыт (только для стенда).
+type AuthConfig struct {
+	Token    string `yaml:"token"`
+	TokenEnv string `yaml:"token_env"`
+}
+
+// CHConfig — куда ходить за данными. Логин и пароль берутся из PAM, если
+// задан pam.secret; иначе из user + password_env.
+type CHConfig struct {
+	URL         string    `yaml:"url"`
+	Insecure    bool      `yaml:"insecure"`
+	User        string    `yaml:"user"`
+	PasswordEnv string    `yaml:"password_env"`
+	Timeout     Duration  `yaml:"timeout"`
+	PAM         PAMConfig `yaml:"pam"`
+}
+
+// PAMConfig — запись в PAM (Privileged Access Management) с логином и
+// паролем ClickHouse. Сам AAPM-токен в файле не хранится: только имя
+// переменной окружения, откуда его взять.
+type PAMConfig struct {
+	Secret     string   `yaml:"secret"`
+	Server     string   `yaml:"server"`
+	TokenEnv   string   `yaml:"token_env"`
+	Comment    string   `yaml:"comment"`
+	CACert     []string `yaml:"ca_cert"`
+	ClientCert string   `yaml:"tls_cert"`
+	ClientKey  string   `yaml:"tls_key"`
+	Insecure   bool     `yaml:"insecure"`
+	Timeout    Duration `yaml:"timeout"`
+	TTL        Duration `yaml:"ttl"`
+}
+
+// TLSConfig — HTTPS самого веб-сервера (браузер → chviewer). Пусто = HTTP,
+// это нормально за nginx или в доверенной сети.
+type TLSConfig struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+func defaultConfig() Config {
+	return Config{
+		Listen:  ":8081",
+		Title:   "ClickHouse Show Polygons",
+		DataDir: "./data",
+		Auth:    AuthConfig{TokenEnv: "CHVIEWER_TOKEN"},
+		ClickHouse: CHConfig{
+			URL:     "http://127.0.0.1:8123/",
+			Timeout: Duration(120 * time.Second),
+			PAM:     PAMConfig{TokenEnv: "PAM_TOKEN", Comment: "chviewer", Timeout: Duration(10 * time.Second)},
+		},
+	}
+}
+
+// LoadConfig читает YAML поверх значений по умолчанию и проверяет его.
+func LoadConfig(path string) (Config, error) {
+	c := defaultConfig()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return c, err
+	}
+	if err := yaml.Unmarshal(data, &c); err != nil {
+		return c, fmt.Errorf("разбор %s: %w", path, err)
+	}
+	if err := c.normalize(); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+func (c *Config) normalize() error {
+	if strings.TrimSpace(c.Listen) == "" {
+		c.Listen = ":8081"
+	}
+	if strings.TrimSpace(c.DataDir) == "" {
+		c.DataDir = "./data"
+	}
+	abs, err := filepath.Abs(c.DataDir)
+	if err != nil {
+		return fmt.Errorf("data_dir: %w", err)
+	}
+	c.DataDir = abs
+
+	u, err := url.Parse(strings.TrimSpace(c.ClickHouse.URL))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("clickhouse.url: нужен http(s)-адрес, получено %q", c.ClickHouse.URL)
+	}
+	if c.ClickHouse.Timeout <= 0 {
+		c.ClickHouse.Timeout = Duration(120 * time.Second)
+	}
+	// Два способа получить пароль исключают друг друга: иначе непонятно,
+	// какой из них действует, и легко оставить в конфиге мёртвую настройку.
+	if c.ClickHouse.PAM.Secret != "" && c.ClickHouse.PasswordEnv != "" {
+		return fmt.Errorf("clickhouse: password_env и pam.secret взаимоисключающи")
+	}
+	if c.ClickHouse.PAM.Secret == "" && c.ClickHouse.PasswordEnv == "" && c.ClickHouse.User == "" {
+		return fmt.Errorf("clickhouse: задайте либо pam.secret, либо user + password_env")
+	}
+	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
+		return fmt.Errorf("tls: нужны оба файла — cert_file и key_file")
+	}
+	return nil
+}
+
+// AuthToken — действующий токен доступа ("" = вход открыт).
+func (c Config) AuthToken() string {
+	if c.Auth.Token != "" {
+		return c.Auth.Token
+	}
+	if c.Auth.TokenEnv != "" {
+		return os.Getenv(c.Auth.TokenEnv)
+	}
+	return ""
+}
+
+const exampleConfig = `# Конфигурация ClickHouse Show Polygons (серверный режим).
+# Запуск: chviewer -config /etc/chviewer.yaml
+
+listen: ":8081"                 # адрес сервера; "127.0.0.1:8081" — только локально
+title: "ClickHouse Show Polygons"
+data_dir: "/var/lib/chviewer"   # здесь хранятся общие шаблоны слоёв
+
+# Вход в веб-интерфейс. Пользователь вводит токен один раз, дальше cookie.
+# Пустой токен = вход без пароля (только для закрытого стенда).
+auth:
+  token: ""                     # можно задать прямо здесь
+  token_env: "CHVIEWER_TOKEN"   # но лучше через переменную окружения
+
+# Куда ходить за полигонами. Браузер этих данных не получает.
+clickhouse:
+  url: "http://clickhouse.example.com:8123/"
+  insecure: false               # true = не проверять сертификат ClickHouse
+  timeout: 120s
+
+  # Первый способ входа: логин здесь, пароль в переменной окружения.
+  user: ""
+  password_env: ""
+
+  # Второй способ: логин и пароль берутся из PAM (AAPM) по пути записи.
+  # Задан secret => user/password_env не используются. Сам токен PAM
+  # берётся только из переменной окружения, в этом файле его нет.
+  pam:
+    secret: ""                  # "/Группа/Подгруппа/запись"; пусто = PAM не используется
+    server: ""                  # https://pam.example.com (пусто = переменная PAM_SERVER)
+    token_env: "PAM_TOKEN"      # имя переменной окружения с AAPM-токеном
+    comment: "chviewer"         # комментарий в журнал аудита PAM
+    ca_cert: []                 # PEM корневых сертификатов PAM
+    tls_cert: ""                # клиентский сертификат для PAM (взаимный TLS)
+    tls_key: ""
+    insecure: false             # true = не проверять сертификат PAM (только стенд)
+    timeout: 10s                # таймаут одного запроса к PAM
+    ttl: 10m                    # сколько держать полученный пароль в памяти
+
+# HTTPS самого веб-сервера. Пусто = HTTP (нормально за nginx).
+tls:
+  cert_file: ""
+  key_file: ""
+`
+
+// WriteExample создаёт файл-пример конфигурации.
+func WriteExample(path string) error {
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("%s уже существует — удалите или укажите другой путь", path)
+	}
+	return os.WriteFile(path, []byte(exampleConfig), 0o600)
+}

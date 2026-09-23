@@ -1,0 +1,36 @@
+# systemd unit для chviewer (CentOS 9 / RHEL 9).
+# Установка:
+#   sudo useradd -r -s /sbin/nologin chviewer
+#   sudo mkdir -p /opt/chviewer /var/lib/chviewer && sudo cp chviewer /opt/chviewer/
+#   sudo cp chviewer.yaml /etc/chviewer.yaml      # data_dir: /var/lib/chviewer
+#   sudo chown -R chviewer:chviewer /var/lib/chviewer
+#   printf 'CHVIEWER_TOKEN=токен\nPAM_TOKEN=aapm-токен\n' | sudo tee /etc/chviewer.env
+#   sudo chmod 600 /etc/chviewer.env
+#   sudo cp chviewer.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#   sudo systemctl enable --now chviewer && sudo systemctl status chviewer
+#
+# Порт 8081 в firewalld:
+#   sudo firewall-cmd --permanent --add-port=8081/tcp && sudo firewall-cmd --reload
+[Unit]
+Description=ClickHouse Show Polygons (полигоны из ClickHouse на карте)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chviewer
+Group=chviewer
+# здесь лежат токен доступа к странице и AAPM-токен PAM; в конфиге их нет
+EnvironmentFile=-/etc/chviewer.env
+ExecStart=/opt/chviewer/chviewer -config /etc/chviewer.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/chviewer
+
+[Install]
+WantedBy=multi-user.target

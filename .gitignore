@@ -16,3 +16,9 @@ testenv/server.crt
 
 # временное
 *.log
+
+# серверный режим
+chviewer
+chviewer.yaml
+data/
+dist-linux/

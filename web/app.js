@@ -392,122 +392,115 @@ function move(from, to) {
   renderLayersUI(); rebuildMapLayers(); markDirty();
 }
 
-// ---------- fingerprint браузера -> ключ AES ----------
-function fingerprint() {
-  return [
-    navigator.userAgent, navigator.language, navigator.platform,
-    screen.width, screen.height, screen.colorDepth,
-    navigator.hardwareConcurrency, new Date().getTimezoneOffset()
-  ].join('|');
-}
-// машинный секрет с бэка: случайный, генерируется при первом запуске exe.
-// Ключ = PBKDF2(отпечаток браузера + секрет) — знания схемы недостаточно,
-// нужен ещё файл secret.key с этой машины.
-// Это не пароль и не ключ: случайная соль (перец) с данной машины, которая
-// вместе с отпечатком браузера идёт на вход PBKDF2. В коде значения нет —
-// оно приходит из secret.key, созданного при первом запуске exe.
-let machineSalt = null;
-async function getMachineSalt() {
-  if (machineSalt === null) {
-    try {
-      const r = await fetch('/api/secret');
-      machineSalt = String((await r.json()).secret || '');
-    } catch (err) {
-      console.warn('не удалось получить машинную соль, использую пустую:', err.message);
-      machineSalt = '';
-    }
-  }
-  return machineSalt;
+// ---------- вход по токену ----------
+// Пароль ClickHouse браузер больше не видит: сервер берёт его из PAM.
+// От пользователя нужен только токен доступа, и тот один раз — дальше cookie.
+let serverInfo = { auth: false, logged_in: true };
+
+async function loadInfo() {
+  serverInfo = await (await fetch('/api/info')).json();
+  $('srvUrl').textContent = serverInfo.clickhouse || '—';
+  $('srvCreds').textContent = serverInfo.credentials || '—';
+  const hint = document.querySelector('.lhint');
+  if (hint && serverInfo.version) hint.textContent += ` · v${serverInfo.version}`;
+  return serverInfo;
 }
 
-async function fpKey(salt) {
-  const enc = new TextEncoder();
-  const material = fingerprint() + '|' + await getMachineSalt();
-  const base = await crypto.subtle.importKey('raw', enc.encode(material), 'PBKDF2', false, ['deriveKey']);
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-}
-const b64 = a => btoa(String.fromCharCode(...new Uint8Array(a)));
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-async function encryptPass(pass) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await fpKey(salt);
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(pass));
-  return b64(salt) + '.' + b64(iv) + '.' + b64(ct);
-}
-async function decryptPass(enc) {
-  const [salt, iv, ct] = enc.split('.').map(unb64);
-  const key = await fpKey(salt);
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
-  return new TextDecoder().decode(pt);
-}
+function showLogin(show) { $('login').style.display = show ? 'flex' : 'none'; }
 
-// ---------- адрес ClickHouse ----------
-function chUrl() {
-  let s = $('f_url').value.trim();
-  const ssl = $('f_ssl').checked;
-  if (!/^https?:\/\//i.test(s)) s = (ssl ? 'https://' : 'http://') + s;
-  const u = new URL(s);
-  if (!u.port) u.port = ssl ? '8443' : '8123';
-  return u.origin + '/';
-}
-
-// ---------- конфиг ----------
-async function saveConfig() {
-  const cfg = {
-    url: $('f_url').value.trim(),
-    user: $('f_user').value,
-    pass_enc: await encryptPass($('f_pass').value),
-    ssl: $('f_ssl').checked,
-    insecure: $('f_insecure').checked,
-    layers: layers.map(l => l.kind === 'table'
-      ? { kind: 'table', table: l.table, geo: l.geo, color: l.color, visible: l.visible }
-      : { kind: 'grid', color: l.color, resolution: l.resolution, enabled: l.enabled, width: l.width })
-  };
-  const r = await (await fetch('/api/config', { method: 'POST', headers: JSON_HDR, body: JSON.stringify(cfg, null, 2) })).json();
-  return r.path;
-}
-async function loadConfig() {
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('loginErr').textContent = '';
   try {
-    const cfg = await (await fetch('/api/config')).json();
-    if (cfg.url) {
-      $('f_url').value = cfg.url;
-      $('f_user').value = cfg.user ?? 'default';
-      $('f_ssl').checked = !!cfg.ssl;
-      $('f_insecure').checked = !!cfg.insecure;
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: JSON_HDR,
+      body: JSON.stringify({ token: $('loginToken').value })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'не удалось войти');
+    showLogin(false);
+    $('loginToken').value = '';
+    await start();
+  } catch (err) { $('loginErr').textContent = err.message; }
+});
+
+// ---------- общие шаблоны слоёв ----------
+// Раньше настройки лежали у каждого в config.json рядом с exe. Теперь они
+// хранятся на сервере и видны всем: один собрал набор слоёв — остальные
+// загружают его в один клик.
+
+function currentLayers() {
+  return layers.map(l => l.kind === 'table'
+    ? { kind: 'table', table: l.table, geo: l.geo, color: l.color, visible: l.visible }
+    : { kind: 'grid', color: l.color, resolution: l.resolution, enabled: l.enabled, width: l.width });
+}
+
+function applyLayers(list) {
+  if (Array.isArray(list) && list.length) {
+    // читаем терпимо: битые элементы пропускаем, отсутствующие поля — по умолчанию
+    layers = list.filter(l => l && typeof l === 'object').map(l => l.kind === 'grid'
+      ? newGridLayer(l.color, l.resolution, l.enabled, l.width)
+      : newTableLayer(l.table, l.geo, l.color, l.visible));
+  } else {
+    layers = [newTableLayer('', 'key')];
+  }
+  if (!layers.some(l => l.kind === 'grid')) layers.push(newGridLayer());
+  renderLayersUI();
+}
+
+async function loadTemplateList() {
+  const sel = $('tplList');
+  const keep = sel.value;
+  try {
+    const d = await (await fetch('/api/templates')).json();
+    sel.innerHTML = '<option value="">— выберите шаблон —</option>';
+    for (const t of (d.templates || [])) {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = t.name;
+      sel.appendChild(o);
     }
-    // конфиг читаем терпимо: отсутствующие поля берём по умолчанию,
-    // битые элементы пропускаем — старые версии файла остаются рабочими
-    if (Array.isArray(cfg.layers) && cfg.layers.length) {
-      layers = cfg.layers.filter(l => l && typeof l === 'object').map(l => l.kind === 'grid'
-        ? newGridLayer(l.color, l.resolution, l.enabled, l.width)
-        : newTableLayer(l.table, l.geo, l.color, l.visible));
-    } else {
-      layers = [newTableLayer('emr_ch.tbl_polygons_bmt', 'key')];
-    }
-    if (!layers.some(l => l.kind === 'grid')) layers.push(newGridLayer());
-    renderLayersUI();
-    if (cfg.pass_enc) {
-      try {
-        $('f_pass').value = await decryptPass(cfg.pass_enc);
-        connect();
-      } catch { say('Пароль сохранён в другом браузере — введите заново', true); }
-    }
+    sel.value = keep;
   } catch (e) { console.error(e); }
 }
 
-// ---------- запросы ----------
+async function saveTemplate() {
+  // Диалоги браузера (prompt/confirm) доступны не во всех окружениях —
+  // имя берём из поля панели, а подтверждение делаем повторным нажатием.
+  const name = $('tplName').value.trim() || ($('tplList').value ? $('tplList').selectedOptions[0].textContent : '');
+  if (!name) { $('tplName').focus(); throw new Error('укажите название шаблона'); }
+  const r = await fetch('/api/templates', {
+    method: 'POST', headers: JSON_HDR,
+    body: JSON.stringify({ name, layers: currentLayers() })
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || 'не сохранилось');
+  await loadTemplateList();
+  $('tplList').value = d.id;
+  $('tplName').value = '';
+  return d.name;
+}
+
+async function loadTemplate(id) {
+  const t = await (await fetch('/api/templates/' + encodeURIComponent(id))).json();
+  if (t.error) throw new Error(t.error);
+  applyLayers(t.layers);
+  connect();
+}
+
+async function deleteTemplate(id) {
+  const r = await fetch('/api/templates/' + encodeURIComponent(id), { method: 'DELETE', headers: JSON_HDR });
+  if (!r.ok) throw new Error((await r.json()).error || 'не удалось удалить');
+  await loadTemplateList();
+  $('tplList').value = '';
+}
+
 async function chQuery(sql) {
   lastSQL = sql;
   $('showSql').style.display = '';
   const resp = await fetch('/api/query', {
     method: 'POST', headers: JSON_HDR,
-    body: JSON.stringify({
-      url: chUrl(), user: $('f_user').value, password: $('f_pass').value,
-      insecure: $('f_insecure').checked, sql
-    })
+    body: JSON.stringify({ sql })
   });
   const data = await resp.json();
   if (data.error) throw new Error(data.error);
@@ -530,8 +523,6 @@ async function loadLayer(l, signal) {
   const resp = await fetch('/api/objects', {
     method: 'POST', headers: JSON_HDR, signal,
     body: JSON.stringify({
-      url: chUrl(), user: $('f_user').value, password: $('f_pass').value,
-      insecure: $('f_insecure').checked,
       table: l.table, geo: l.geo,
       bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
       limit: MAX_ROWS, min_deg: minDeg, reset: l.needReset
@@ -639,9 +630,29 @@ $('f').addEventListener('input', e => { if (e.target !== $('saveBtn')) markDirty
 
 $('saveBtn').addEventListener('click', async () => {
   try {
-    msg.textContent = 'Сохранено в ' + await saveConfig();
-    markSaved();
+    const name = await saveTemplate();
+    if (name) { msg.textContent = 'Шаблон «' + name + '» сохранён'; markSaved(); }
   } catch (e) { msg.textContent = 'Не сохранилось: ' + e.message; }
+});
+$('tplLoad').addEventListener('click', async () => {
+  const id = $('tplList').value;
+  if (!id) { msg.textContent = 'Сначала выберите шаблон'; return; }
+  try { await loadTemplate(id); msg.textContent = ''; markSaved(); }
+  catch (e) { msg.textContent = 'Не загрузилось: ' + e.message; }
+});
+let delArmed = '';
+$('tplDel').addEventListener('click', async () => {
+  const id = $('tplList').value;
+  if (!id) { msg.textContent = 'Сначала выберите шаблон'; return; }
+  if (delArmed !== id) {   // первое нажатие только предупреждает
+    delArmed = id;
+    msg.textContent = 'Шаблон общий: нажмите «удалить» ещё раз, чтобы удалить его у всех';
+    setTimeout(() => { if (delArmed === id) { delArmed = ''; msg.textContent = ''; } }, 5000);
+    return;
+  }
+  delArmed = '';
+  try { await deleteTemplate(id); msg.textContent = 'Шаблон удалён'; }
+  catch (e) { msg.textContent = 'Не удалилось: ' + e.message; }
 });
 $('showSql').addEventListener('click', () => showSqlBox());
 $('closeSql').addEventListener('click', () => $('sqlbox').classList.remove('show'));
@@ -692,11 +703,7 @@ async function runSearch() {
     const perLayer = await Promise.all(visibleTables.map(async l => {
       const resp = await fetch('/api/search', {
         method: 'POST', headers: JSON_HDR, signal: searchAbort.signal,
-        body: JSON.stringify({
-          url: chUrl(), user: $('f_user').value, password: $('f_pass').value,
-          insecure: $('f_insecure').checked,
-          table: l.table, geo: l.geo, query: q, limit: 50
-        })
+        body: JSON.stringify({ table: l.table, geo: l.geo, query: q, limit: 50 })
       });
       const data = await resp.json();
       if (data.error) throw new Error(`Слой ${l.table}: ${data.error}`);
@@ -757,10 +764,21 @@ document.addEventListener('click', e => {
   if (!$('search').contains(e.target)) hideSearch();
 });
 
-loadConfig();
+// ---------- старт ----------
+// Сначала спрашиваем сервер, нужен ли вход. Если нужен и cookie ещё нет —
+// показываем экран входа; всё остальное загружается уже после него.
+async function start() {
+  await loadTemplateList();
+  applyLayers(null);
+  say('Выберите шаблон или задайте слои и нажмите «Показать на карте»');
+}
 
-// версия приложения — в подсказке панели
-fetch('/api/version').then(r => r.json()).then(v => {
-  const hint = document.querySelector('.lhint');
-  if (hint && v.version) hint.textContent += ` · ClickHouse Viewer v${v.version}`;
-}).catch(() => {});
+(async () => {
+  try {
+    const info = await loadInfo();
+    if (info.auth && !info.logged_in) { showLogin(true); return; }
+    await start();
+  } catch (e) {
+    say('Сервер недоступен: ' + e.message, true);
+  }
+})();

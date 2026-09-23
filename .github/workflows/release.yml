@@ -1,4 +1,7 @@
-# Релиз: сборка под Windows с иконкой, portable-zip и MSI-инсталлятор (WiX).
+# Релиз серверного приложения: основной артефакт — tar.gz под Linux (CentOS 9
+# и совместимые) со скриптом запуска и systemd-юнитом; дополнительно zip под
+# Windows для локального запуска. MSI-инсталлятора больше нет: он ставил
+# настольную версию с ярлыками, а служба так не разворачивается.
 # Запускается по тегу vX.Y.Z либо вручную (Actions → release → Run workflow),
 # при ручном запуске тег создаётся сам из файла VERSION.
 name: release
@@ -18,7 +21,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -59,24 +62,22 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Иконка и версия в ресурсы Windows
+      - name: Сборка под Linux (основной артефакт)
         run: |
-          go run github.com/tc-hib/go-winres@latest make \
-            --file-version "$VER" --product-version "$VER"
+          # статическая сборка: работает на CentOS 9 и любом другом дистрибутиве
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=$VER" -o chviewer .
+          PKG="chviewer-$VER-linux-amd64"
+          mkdir -p "$PKG"
+          cp chviewer scripts/launch/serve.sh README.md LICENSE "$PKG/"
+          cp scripts/systemd/chviewer.service "$PKG/"
+          ./chviewer -config "$PKG/chviewer.yaml.example" -init
+          chmod +x "$PKG/chviewer" "$PKG/serve.sh"
+          tar czf "ClickHouse-Show-Polygons-$VER-linux-amd64.tar.gz" "$PKG"
 
-      - name: Сборка chviewer.exe
+      - name: Сборка под Windows
         run: |
-          go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .
-
-      - name: Упаковка chviewer.exe в zip
-        run: |
-          7z a -tzip "ClickHouse-Show-Polygons-$VER-portable.zip" chviewer.exe README.md LICENSE
-
-      - name: Сборка MSI-инсталлятора (WiX)
-        run: |
-          dotnet tool install --global wix --version 6.0.2
-          wix build -arch x64 -d AppVersion="$VER" \
-            -o "ClickHouse-Show-Polygons-$VER.msi" installer.wxs
+          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X main.version=$VER" -o chviewer.exe .
+          zip -q "ClickHouse-Show-Polygons-$VER-windows-amd64.zip" chviewer.exe README.md LICENSE
 
       - name: Публикация релиза
         uses: softprops/action-gh-release@v3
@@ -84,8 +85,8 @@ jobs:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
           files: |
-            ClickHouse-Show-Polygons-*-portable.zip
-            ClickHouse-Show-Polygons-*.msi
+            ClickHouse-Show-Polygons-*-linux-amd64.tar.gz
+            ClickHouse-Show-Polygons-*-windows-amd64.zip
           generate_release_notes: true
 
       # храним только один релиз: все предыдущие (и их теги) удаляются

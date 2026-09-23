@@ -164,23 +164,58 @@
   .pv-empty { color: #98a2b3; }
   .pv-json { font-family: Consolas, monospace; font-size: 12px; color: #6b21a8; }
   .pv-none { color: var(--muted); }
+
+/* сведения о сервере: только для чтения, подключение задаёт администратор */
+.srv { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; align-items:baseline;
+       margin-bottom:10px; font-size:12px }
+.srv-label { color:#666 }
+.srv-val { font-family:ui-monospace,Menlo,Consolas,monospace; word-break:break-all }
+.tpl { display:flex; gap:8px; align-items:center; margin-bottom:4px }
+.tpl select, .tpl input { flex:1; min-width:0 }
+
+/* экран входа поверх карты */
+#login { position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center;
+         background:rgba(20,30,45,.55); backdrop-filter:blur(2px) }
+#login form { background:#fff; padding:24px 28px; border-radius:10px; min-width:300px;
+              box-shadow:0 12px 40px rgba(0,0,0,.3); display:flex; flex-direction:column; gap:10px }
+#login h3 { margin:0 }
+.login-hint { margin:0; color:#666; font-size:12px }
+#login input { padding:8px 10px; font-size:14px }
 </style>
 </head>
 <body>
 <div id="map"></div>
 
+<div id="login" style="display:none">
+  <form id="loginForm">
+    <h3>Вход</h3>
+    <p class="login-hint">Введите токен доступа — он запомнится в этом браузере.</p>
+    <input type="password" id="loginToken" placeholder="Токен доступа" autocomplete="current-password">
+    <button type="submit">Войти</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+</div>
+
+
 <div id="panel">
   <form id="f">
-    <div class="grid">
-      <span>Сервер</span><input type="text" id="f_url" placeholder="IP или host">
-      <span>Логин</span><input type="text" id="f_user" value="default">
-      <span>Пароль</span><input type="password" id="f_pass">
-      <span></span><span></span>
-      <div class="checks">
-        <label><input type="checkbox" id="f_ssl" checked> SSL (https, порт 8443)</label>
-        <label><input type="checkbox" id="f_insecure" checked> не проверять сертификат</label>
-      </div>
+    <div class="srv">
+      <span class="srv-label">ClickHouse</span>
+      <span class="srv-val" id="srvUrl">…</span>
+      <span class="srv-label">Учётные данные</span>
+      <span class="srv-val" id="srvCreds">…</span>
     </div>
+
+    <h4>Общие шаблоны</h4>
+    <div class="tpl">
+      <select id="tplList"><option value="">— выберите шаблон —</option></select>
+      <button type="button" class="link" id="tplLoad">загрузить</button>
+      <button type="button" class="link" id="tplDel" title="удалить шаблон">удалить</button>
+    </div>
+    <div class="tpl">
+      <input type="text" id="tplName" placeholder="название шаблона для сохранения">
+    </div>
+    <div class="lhint">Шаблоны общие: сохранённый набор слоёв сразу виден всем.</div>
 
     <h4>Слои (первый — верхний)</h4>
     <div id="layers"></div>
@@ -190,8 +225,8 @@
     </div>
 
     <div class="btns">
-      <button type="submit">Подключиться</button>
-      <button type="button" class="secondary" id="saveBtn">Сохранить настройки</button>
+      <button type="submit">Показать на карте</button>
+      <button type="button" class="secondary" id="saveBtn">Сохранить как шаблон</button>
       <button type="button" class="link" id="hideBtn">свернуть</button>
       <span id="msg"></span>
     </div>
@@ -205,7 +240,7 @@
   <div id="searchRes"></div>
 </div>
 
-<div id="status"><span id="statustext">Укажите параметры и нажмите «Подключиться»</span><button type="button" class="link" id="showSql" style="display:none">SQL</button></div>
+<div id="status"><span id="statustext">Выберите шаблон или задайте слои и нажмите «Показать на карте»</span><button type="button" class="link" id="showSql" style="display:none">SQL</button></div>
 
 <div id="sqlbox">
   <h3>Последний запрос к ClickHouse</h3>
