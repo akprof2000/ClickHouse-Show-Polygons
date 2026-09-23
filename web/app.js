@@ -459,14 +459,76 @@ function fillBasemaps(list) {
   let saved = 0;
   try { saved = Math.max(0, basemaps.findIndex(b => b.name === localStorage.getItem('basemap'))); } catch {}
   sel.value = String(saved);
+  bmManual = saved > 0;   // сохранённый выбор — осознанный, его не подменяем
+  bmTried = new Set();
   setBasemap(saved, true);
+  // раз в полминуты перепроверяем, жив ли сервер тайлов
+  setInterval(checkBasemap, 30000);
 }
 
-function setBasemap(i, initial) {
+// Автопереключение, как в mrr2h3: тайл-сервер может быть недоступен или
+// блокировать нас (у OpenStreetMap это обычное дело для рабочих систем), и
+// одна такая подложка не должна оставлять карту пустой. После нескольких
+// ошибок берём следующую из списка. Подложку, выбранную человеком, тихо не
+// подменяем — иначе выглядит как «выбрал 2ГИС, показало OpenStreetMap».
+let bmErrors = 0;
+let bmTried = new Set();
+let bmManual = false;
+let bmCheckTimer = null;
+
+function basemapInfo(text, bad) {
+  const el = $('basemapInfo');
+  el.textContent = text || '';
+  el.classList.toggle('err', !!bad);
+}
+
+// Проверка здоровья: грузим один тестовый тайл обычной картинкой. Ответ
+// «заблокировано» от OSM приходит как нормальная картинка — такую проверку
+// он проходит, поэтому это именно индикатор доступности, не гарантия.
+function checkBasemap() {
+  const b = basemaps[basemapIndex];
+  if (!b) return;
+  const img = new Image();
+  const raw = b.tiles[0].replace('{z}', '1').replace('{x}', '1').replace('{y}', '0').replace('{s}', 'a');
+  const url = raw + (raw.includes('?') ? '&' : '?') + '_=' + Date.now();
+  const timer = setTimeout(() => { img.src = ''; basemapInfo(b.name + ': сервер тайлов не отвечает (8 с)', true); }, 8000);
+  // успех снимает только сообщение об ошибке; пояснение «автоматически:
+  // … не отвечает» остаётся — человек должен видеть, почему подложка не та
+  img.onload = () => { clearTimeout(timer); if ($('basemapInfo').classList.contains('err')) basemapInfo(''); };
+  img.onerror = () => { clearTimeout(timer); basemapInfo(b.name + ': сервер тайлов недоступен или блокирует запросы', true); };
+  img.src = url;
+}
+
+map.on('error', e => {
+  const msg = (e && e.error && e.error.message) || '';
+  if (!(e.sourceId === 'base' || /tile|Failed to fetch|status/i.test(msg))) return;
+  if (++bmErrors < 4) return;
+  const cur = basemaps[basemapIndex];
+  if (bmManual) {
+    if (bmErrors === 4) basemapInfo(cur.name + ': тайлы не загружаются (' + (msg || 'сервер недоступен или блокирует') + ') — выберите другую подложку', true);
+    return;
+  }
+  const next = basemaps.findIndex((_, i) => !bmTried.has(i));
+  if (next < 0) {
+    if (bmErrors === 4) basemapInfo('Ни один сервер подложек не отвечает — данные показаны без карты', true);
+    return;
+  }
+  bmTried.add(next);
+  say('Подложка «' + cur.name + '» недоступна — переключаюсь на «' + basemaps[next].name + '»');
+  setBasemap(next, false, 'автоматически: «' + cur.name + '» не отвечает');
+});
+
+function setBasemap(i, initial, why) {
   const b = basemaps[i];
   if (!b) return;
   basemapIndex = i;
+  bmErrors = 0;
+  bmTried.add(i);
+  $('basemap').value = String(i);
+  basemapInfo(why || '');
   try { localStorage.setItem('basemap', b.name); } catch {}
+  clearTimeout(bmCheckTimer);
+  bmCheckTimer = setTimeout(checkBasemap, 500);
 
   if (initial && map.getSource('base')) {
     // стиль уже такой же — незачем пересобирать слои
@@ -486,7 +548,7 @@ function setBasemap(i, initial) {
   });
 }
 
-$('basemap').addEventListener('change', e => setBasemap(+e.target.value));
+$('basemap').addEventListener('change', e => { bmManual = true; bmTried = new Set(); setBasemap(+e.target.value); });
 
 function showLogin(show) { $('login').style.display = show ? 'flex' : 'none'; }
 

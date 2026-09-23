@@ -71,58 +71,34 @@ type Basemap struct {
 
 // defaultBasemaps — набор по умолчанию.
 func defaultBasemaps() []Basemap {
+	osm := "© OpenStreetMap contributors"
+	ya := func(name, url string) Basemap {
+		// Яндекс отдаёт тайлы в EPSG:3395; браузер перепроецирует их в
+		// 3857 на лету (web/merc3395.js), иначе подложка съедет
+		return Basemap{Name: name, Tiles: []string{url}, Attribution: "© Яндекс", MaxZoom: 19, Projection: "3395"}
+	}
+	esri := func(name, layer, attr string) Basemap {
+		return Basemap{Name: name, MaxZoom: 19, Attribution: attr,
+			Tiles: []string{"https://server.arcgisonline.com/ArcGIS/rest/services/" + layer + "/MapServer/tile/{z}/{y}/{x}"}}
+	}
 	return []Basemap{
-		{
-			Name:        "OpenStreetMap",
-			Tiles:       []string{"https://tile.openstreetmap.org/{z}/{x}/{y}.png"},
-			Attribution: "© OpenStreetMap contributors",
-			MaxZoom:     19,
-		},
-		{
-			// Яндекс отдаёт тайлы в EPSG:3395; браузер перепроецирует их в
-			// 3857 на лету (web/merc3395.js), иначе подложка съедет
-			Name:        "Яндекс",
-			Tiles:       []string{"https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU"},
-			Attribution: "© Яндекс",
-			MaxZoom:     20,
-			Projection:  "3395",
-		},
-		{
-			Name:        "2ГИС",
-			Tiles:       []string{"https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}"},
-			Attribution: "© 2ГИС",
-			MaxZoom:     19,
-		},
-		{
-			Name:        "Google",
-			Tiles:       []string{"https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"},
-			Attribution: "© Google",
-			MaxZoom:     20,
-		},
-		{
-			Name:        "OSM светлая (Carto)",
-			Tiles:       []string{"https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"},
-			Attribution: "© OpenStreetMap contributors, © CARTO",
-			MaxZoom:     19,
-		},
-		{
-			Name:        "OSM тёмная (Carto)",
-			Tiles:       []string{"https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"},
-			Attribution: "© OpenStreetMap contributors, © CARTO",
-			MaxZoom:     19,
-		},
-		{
-			Name:        "Спутник (Esri)",
-			Tiles:       []string{"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"},
-			Attribution: "© Esri, Maxar, Earthstar Geographics",
-			MaxZoom:     19,
-		},
-		{
-			Name:        "Рельеф (OpenTopoMap)",
-			Tiles:       []string{"https://a.tile.opentopomap.org/{z}/{x}/{y}.png"},
-			Attribution: "© OpenStreetMap contributors, SRTM, © OpenTopoMap (CC-BY-SA)",
-			MaxZoom:     17,
-		},
+		{Name: "OpenStreetMap", Tiles: []string{"https://tile.openstreetmap.org/{z}/{x}/{y}.png"}, Attribution: osm, MaxZoom: 19},
+		// немецкое зеркало OSM: другой сервер и другие правила блокировки —
+		// первый кандидат, когда основной OSM отвечает «Access blocked»
+		{Name: "OpenStreetMap DE", Tiles: []string{"https://tile.openstreetmap.de/{z}/{x}/{y}.png"}, Attribution: osm, MaxZoom: 19},
+		ya("Яндекс — схема", "https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU"),
+		ya("Яндекс — спутник", "https://core-sat.maps.yandex.net/tiles?l=sat&x={x}&y={y}&z={z}"),
+		{Name: "2ГИС", Tiles: []string{"https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}"}, Attribution: "© 2ГИС", MaxZoom: 18},
+		{Name: "Google — схема", Tiles: []string{"https://mt0.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"}, Attribution: "© Google", MaxZoom: 20},
+		{Name: "Google — спутник", Tiles: []string{"https://mt0.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"}, Attribution: "© Google", MaxZoom: 20},
+		{Name: "Google — гибрид", Tiles: []string{"https://mt0.google.com/vt/lyrs=y&x={x}&y={y}&z={z}"}, Attribution: "© Google", MaxZoom: 20},
+		{Name: "Carto — светлая", Tiles: []string{"https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"}, Attribution: osm + ", © CARTO", MaxZoom: 19},
+		{Name: "Carto — тёмная", Tiles: []string{"https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"}, Attribution: osm + ", © CARTO", MaxZoom: 19},
+		esri("Esri — спутник", "World_Imagery", "© Esri, Maxar, Earthstar Geographics"),
+		esri("Esri — улицы", "World_Street_Map", "© Esri, HERE, Garmin, OpenStreetMap contributors"),
+		esri("Esri — топография", "World_Topo_Map", "© Esri, HERE, Garmin, OpenStreetMap contributors"),
+		{Name: "OpenTopoMap", Tiles: []string{"https://a.tile.opentopomap.org/{z}/{x}/{y}.png"}, Attribution: osm + ", SRTM | © OpenTopoMap (CC-BY-SA)", MaxZoom: 17},
+		{Name: "CyclOSM", Tiles: []string{"https://a.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png"}, Attribution: osm + " | CyclOSM", MaxZoom: 19},
 	}
 }
 
@@ -431,8 +407,11 @@ clickhouse:
   tls_cert: ""            # клиентский сертификат (взаимный TLS)
   tls_key: ""             # ключ клиентского сертификата
 
-# Подложки карты на выбор. Пусто = встроенный набор: OpenStreetMap, Яндекс,
-# 2ГИС, Google, светлая и тёмная Carto, спутник Esri, рельеф OpenTopoMap.
+# Подложки карты на выбор. Пусто = встроенный набор, тот же, что в mrr2h3:
+# OpenStreetMap и его немецкое зеркало, Яндекс (схема, спутник), 2ГИС,
+# Google (схема, спутник, гибрид), Carto, Esri (спутник, улицы, топография),
+# OpenTopoMap, CyclOSM. Если сервер тайлов не отвечает, страница сама
+# переключается на следующий из списка.
 #
 # Яндекс, 2ГИС и Google по своим правилам разрешают тайлы только через
 # собственные API и SDK — если это для вас важно, задайте список сами.
