@@ -28,8 +28,8 @@ HTTPS_CERT="${HTTPS_CERT:-}"                  # /etc/pki/tls/certs/chviewer.pem
 HTTPS_KEY="${HTTPS_KEY:-}"                    # /etc/pki/tls/private/chviewer.key
 
 # --- ClickHouse -------------------------------------------------------------
-CH_URL="${CH_URL:-http://localhost:8123/}"    # http(s)-адрес ClickHouse
-CH_INSECURE="${CH_INSECURE:-false}"           # true = не проверять сертификат ClickHouse
+CH_ADDR="${CH_ADDR:-localhost:8123}"          # host:port HTTP-интерфейса (8443 при TLS)
+CH_DATABASE="${CH_DATABASE:-default}"         # база по умолчанию для слоёв
 CH_TIMEOUT="${CH_TIMEOUT:-120s}"
 CH_USER="${CH_USER:-default}"
 CH_PASSWORD_ENV="${CH_PASSWORD_ENV:-CH_PASSWORD}"  # имя переменной окружения с паролем
@@ -45,6 +45,11 @@ PAM_TLS_KEY="${PAM_TLS_KEY:-}"
 PAM_INSECURE="${PAM_INSECURE:-false}"
 PAM_TIMEOUT="${PAM_TIMEOUT:-10s}"
 PAM_TTL="${PAM_TTL:-10m}"
+# защита соединения с ClickHouse: off | on | ca | insecure
+CH_TLS="${CH_TLS:-off}"
+CA_CERT="${CA_CERT:-}"                        # /etc/ssl/ch-ca.pem (для CH_TLS=ca)
+TLS_CERT="${TLS_CERT:-}"                      # клиентский сертификат (взаимный TLS)
+TLS_KEY="${TLS_KEY:-}"
 
 # ---------------------------------------------------------------------------
 CONFIG="${CONFIG:-$DIR/chviewer.yaml}"
@@ -58,6 +63,9 @@ if command -v cygpath >/dev/null 2>&1; then
   [ -n "$HTTPS_CERT" ] && HTTPS_CERT="$(cygpath -m "$HTTPS_CERT")"
   [ -n "$HTTPS_KEY" ]  && HTTPS_KEY="$(cygpath -m "$HTTPS_KEY")"
   [ -n "$PAM_CA" ]     && PAM_CA="$(cygpath -m "$PAM_CA")"
+  [ -n "$CA_CERT" ]    && CA_CERT="$(cygpath -m "$CA_CERT")"
+  [ -n "$TLS_CERT" ]   && TLS_CERT="$(cygpath -m "$TLS_CERT")"
+  [ -n "$TLS_KEY" ]    && TLS_KEY="$(cygpath -m "$TLS_KEY")"
   [ -n "$PAM_TLS_CERT" ] && PAM_TLS_CERT="$(cygpath -m "$PAM_TLS_CERT")"
   [ -n "$PAM_TLS_KEY" ]  && PAM_TLS_KEY="$(cygpath -m "$PAM_TLS_KEY")"
 fi
@@ -67,7 +75,8 @@ if [ ! -f "$CONFIG" ]; then
   # user/password_env в конфиге остаются пустыми
   ch_user="$CH_USER"; ch_password_env="$CH_PASSWORD_ENV"
   if [ -n "$PAM_SECRET" ]; then ch_user=""; ch_password_env=""; fi
-  ca_list=""; [ -n "$PAM_CA" ] && ca_list="\"$PAM_CA\""
+  pam_ca_list=""; [ -n "$PAM_CA" ] && pam_ca_list="\"$PAM_CA\""
+  ca_list="";     [ -n "$CA_CERT" ] && ca_list="\"$CA_CERT\""
   cat > "$CONFIG" <<YAML
 # Создано serve.sh из значений по умолчанию. Полный пример: chviewer -init
 listen: "$LISTEN"
@@ -77,8 +86,8 @@ auth:
   token: "$AUTH_TOKEN"
   token_env: "$AUTH_TOKEN_ENV"
 clickhouse:
-  url: "$CH_URL"
-  insecure: $CH_INSECURE
+  addr: ["$CH_ADDR"]
+  database: "$CH_DATABASE"
   timeout: $CH_TIMEOUT
   user: "$ch_user"
   password_env: "$ch_password_env"
@@ -87,12 +96,16 @@ clickhouse:
     server: "$PAM_SERVER"
     token_env: "$PAM_TOKEN_ENV"
     comment: "$PAM_COMMENT"
-    ca_cert: [$ca_list]
+    ca_cert: [$pam_ca_list]
     tls_cert: "$PAM_TLS_CERT"
     tls_key: "$PAM_TLS_KEY"
     insecure: $PAM_INSECURE
     timeout: $PAM_TIMEOUT
     ttl: $PAM_TTL
+  tls: "$CH_TLS"
+  ca_cert: [$ca_list]
+  tls_cert: "$TLS_CERT"
+  tls_key: "$TLS_KEY"
 tls:
   cert_file: "$HTTPS_CERT"
   key_file: "$HTTPS_KEY"

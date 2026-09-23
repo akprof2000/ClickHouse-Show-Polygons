@@ -42,6 +42,7 @@ trap 'rm -rf "$TMP"' EXIT
 # Go нужен windows-вид пути: для неё /tmp/x это C:\tmp\x,
 # а у MSYS тот же /tmp живёт в другом месте
 TMPW=$(cygpath -m "$TMP" 2>/dev/null || echo "$TMP")
+cp testenv/server.crt "$TMP/server.crt"
 cat > "$TMP/chviewer.yaml" <<YAML
 listen: "127.0.0.1:$PORT"
 title: "chviewer test"
@@ -49,7 +50,9 @@ data_dir: "$TMPW/data"
 auth:
   token_env: "CHVIEWER_TEST_TOKEN"
 clickhouse:
-  url: "http://localhost:8123/"
+  addr: ["localhost:8123"]
+  database: "default"
+  tls: "off"
   user: "default"
   password_env: "CH_TEST_PASSWORD"
 YAML
@@ -123,7 +126,30 @@ api GET /api/templates | grep -q 'Участки БМТ'; check "кирилли�
 api DELETE /api/templates/test-template | grep -q '"ok":true'; check "шаблон удаляется" $?
 api GET /api/templates | grep -q 'test-template'; check "после удаления шаблона в списке нет" $((! $?))
 
-echo "=== 10. Защита от межсайтовых запросов ==="
+echo "=== 10. Режимы TLS до ClickHouse ==="
+# конфигурация для проверки режима: chmode <tls> [ca_cert]
+chmode() {
+  cat > "$TMP/tls.yaml" <<YAML
+listen: "127.0.0.1:$((PORT+1))"
+data_dir: "$TMPW/data"
+auth:
+  token_env: "CHVIEWER_TEST_TOKEN"
+clickhouse:
+  addr: ["localhost:8443"]
+  tls: "$1"
+  ca_cert: [${2:-}]
+  user: "default"
+  password_env: "CH_TEST_PASSWORD"
+YAML
+  CH_TEST_PASSWORD=test123 ./chviewer.exe -config "$TMP/tls.yaml" -check >/dev/null 2>&1
+}
+chmode insecure; check "tls: insecure — соединение с самоподписанным сертификатом" $?
+chmode ca "\"$TMPW/server.crt\""; check "tls: ca — сертификат принят из ca_cert" $?
+chmode on; check "tls: on — чужой сертификат отвергнут системными корнями" $((! $?))
+chmode ca; check "tls: ca без ca_cert — понятная ошибка" $((! $?))
+chmode нечто; check "неизвестный режим tls отклонён" $((! $?))
+
+echo "=== 11. Защита от межсайтовых запросов ==="
 curl -s -o /dev/null -w '%{http_code}' -X POST -H "$CT" -H "Cookie: $COOKIE" \
   -H "Origin: http://evil.example.com" --data-binary '{}' "$APP/api/objects" | grep -q 403
 check "запрос с чужим Origin отклонён" $?
@@ -131,7 +157,7 @@ curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/x-w
   -H "Cookie: $COOKIE" --data-binary '{}' "$APP/api/objects" | grep -q 415
 check "запрос без JSON-заголовка отклонён" $?
 
-echo "=== 11. Ошибочные сценарии ==="
+echo "=== 12. Ошибочные сценарии ==="
 api POST /api/query '{"sql":"SELECT * FROM нет_такой_таблицы FORMAT JSON"}' | grep -qi 'error'
 check "несуществующая таблица -> ошибка" $?
 api POST /api/objects '{"table":"","geo":"","bbox":[1,2,3,4]}' | grep -qi 'error'

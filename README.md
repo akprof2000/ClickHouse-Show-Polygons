@@ -5,7 +5,7 @@
 [![последний релиз](https://img.shields.io/github/v/release/akprof2000/ClickHouse-Show-Polygons?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
 [![скачивания](https://img.shields.io/github/downloads/akprof2000/ClickHouse-Show-Polygons/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases)
 [![лицензия MIT](https://img.shields.io/github/license/akprof2000/ClickHouse-Show-Polygons?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F)](LICENSE)
-[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-34%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
+[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-39%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Linux](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Linux%20%2F%20CentOS%209-262577?logo=linux&logoColor=white)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-8123%20%2F%208443-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com)
@@ -111,7 +111,7 @@ sudo firewall-cmd --permanent --add-port=8081/tcp && sudo firewall-cmd --reload
 и запускает сервер; дальше правьте уже сам YAML.
 
 ```bash
-CH_URL=http://clickhouse:8123/ CH_PASSWORD=секрет CHVIEWER_TOKEN=токен ./serve.sh
+CH_ADDR=clickhouse:8123 CH_PASSWORD=секрет CHVIEWER_TOKEN=токен ./serve.sh
 
 # или с получением логина и пароля из PAM
 PAM_SERVER=https://pam.example.com PAM_TOKEN=aapm-токен PAM_SECRET=/Инфраструктура/ClickHouse/viewer CHVIEWER_TOKEN=токен ./serve.sh
@@ -128,13 +128,32 @@ auth:
   token_env: "CHVIEWER_TOKEN"   # токен доступа к странице — из окружения
 
 clickhouse:
-  url: "http://clickhouse.example.com:8123/"
+  addr: ["ch1.example.com:8443", "ch2.example.com:8443"]  # можно несколько
+  database: "default"           # база по умолчанию: слои можно писать без префикса
   pam:
     secret: "/Инфраструктура/ClickHouse/viewer"
     server: "https://pam.example.com"
     token_env: "PAM_TOKEN"      # AAPM-токен — тоже только из окружения
     ttl: 10m                    # сколько держать полученный пароль в памяти
+  tls: "ca"                     # off | on | ca | insecure
+  ca_cert: ["/etc/ssl/ch-ca.pem"]
 ```
+
+Блок `clickhouse` устроен так же, как в mrr2h3, включая имена полей:
+
+| Поле | Что задаёт |
+| --- | --- |
+| `addr` | список `host:port` HTTP-интерфейса. Порт можно не писать: 8123 без TLS, 8443 с ним. Адреса пробуются по очереди, начиная с последнего удачного |
+| `database` | база по умолчанию — в слоях достаточно имени таблицы без префикса |
+| `tls` | `off` — обычный HTTP; `on` — HTTPS с системными корнями; `ca` — HTTPS с доверием сертификатам из `ca_cert`; `insecure` — HTTPS без проверки (только стенд) |
+| `ca_cert` | PEM-файлы корневых сертификатов для режима `ca` |
+| `tls_cert`, `tls_key` | клиентский сертификат и ключ для взаимного TLS |
+| `user`, `password_env` | вход логином и паролем из переменной окружения |
+| `pam` | вход через PAM: путь записи, адрес, имя переменной с AAPM-токеном, свои сертификаты и `ttl` кэша |
+
+Несочетаемые настройки отбиваются при запуске: клиентский сертификат при
+`tls: off`, режим `ca` без `ca_cert`, только один файл из пары сертификат/ключ,
+`password_env` вместе с `pam.secret`.
 
 Ни один секрет в YAML не хранится: в файле только имена переменных окружения.
 Сами значения задаются в `/etc/chviewer.env`, который читает systemd.
@@ -468,7 +487,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o chviewer .
 ├── scripts/launch/serve.sh  # настройка и запуск, создаёт chviewer.yaml
 ├── scripts/systemd/         # юнит для CentOS 9 / RHEL 9
 ├── build.sh                 # сборка фронта + бинарника
-├── test.sh                  # 34 автотеста
+├── test.sh                  # 39 автотестов
 ├── testenv/setup.sql        # тестовые таблицы для стенда
 ├── VERSION                  # версия, вшивается в бинарник
 └── .github/workflows/release.yml   # релиз по тегу или вручную
@@ -532,13 +551,13 @@ CentOS — так отлаживалась и текущая версия:
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o dist-linux/chviewer .
 cp scripts/launch/serve.sh dist-linux/
-docker run -d --name chviewer -p 8081:8081   -e CH_URL=http://host.docker.internal:8123/ -e CH_PASSWORD=test123   -e CHVIEWER_TOKEN=токен -e DATA_DIR=/var/lib/chviewer   --add-host=host.docker.internal:host-gateway   -v "$PWD/dist-linux:/opt/chviewer" -w /opt/chviewer   quay.io/centos/centos:stream9 ./serve.sh
+docker run -d --name chviewer -p 8081:8081   -e CH_ADDR=host.docker.internal:8123 -e CH_PASSWORD=test123   -e CHVIEWER_TOKEN=токен -e DATA_DIR=/var/lib/chviewer   --add-host=host.docker.internal:host-gateway   -v "$PWD/dist-linux:/opt/chviewer" -w /opt/chviewer   quay.io/centos/centos:stream9 ./serve.sh
 ```
 
 ```bash
 # сертификат для https-порта
 openssl req -x509 -newkey rsa:2048 -keyout testenv/server.key -out testenv/server.crt \
-  -days 365 -nodes -subj "//CN=localhost"
+  -days 365 -nodes -subj "//CN=localhost"   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 
 # контейнер
 docker run -d --name ch-test -p 8123:8123 -p 8443:8443 \
@@ -551,8 +570,8 @@ docker run -d --name ch-test -p 8123:8123 -p 8443:8443 \
 # тестовые данные
 docker exec -i ch-test clickhouse-client --password test123 --multiquery < testenv/setup.sql
 
-# 34 автотеста: вход по токену, PAM/конфигурация, кэш, bbox, поиск,
-# общие шаблоны, защита от межсайтовых запросов, кириллица, ошибки
+# 39 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
+# шаблоны, режимы TLS с сертификатами, защита от межсайтовых запросов, ошибки
 bash test.sh
 ```
 

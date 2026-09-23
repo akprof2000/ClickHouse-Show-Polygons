@@ -159,7 +159,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"version":     s.version,
 		"auth":        s.token != "",
 		"logged_in":   s.token == "" || s.tokenOK(r),
-		"clickhouse":  s.cfg.ClickHouse.URL,
+		"clickhouse":  s.ch.Addrs(),
 		"credentials": credSource(s.cfg.ClickHouse),
 	})
 }
@@ -274,7 +274,7 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSONErr(w, http.StatusBadRequest, "некорректный запрос")
 		return
 	}
-	log.Printf("QUERY -> %s | полный SQL:\n%s", s.cfg.ClickHouse.URL, q.SQL)
+	log.Printf("QUERY -> %s | полный SQL:\n%s", s.ch.Addrs(), q.SQL)
 	start := time.Now()
 	body, err := s.ch.Do(r.Context(), q.SQL)
 	dur := time.Since(start).Round(time.Millisecond)

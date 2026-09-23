@@ -72,7 +72,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL учётные данные ClickHouse: %v", err)
 	}
-	ch := newCHClient(cfg.ClickHouse, creds)
+	ch, err := newCHClient(cfg.ClickHouse, creds)
+	if err != nil {
+		log.Fatalf("FATAL подключение к ClickHouse: %v", err)
+	}
 
 	// проверяем связку «конфиг + PAM + ClickHouse» на старте: понятная
 	// ошибка в журнале службы лучше, чем пустая карта у пользователя
@@ -86,7 +89,7 @@ func main() {
 		log.Printf("ВНИМАНИЕ ClickHouse сейчас недоступен (%v) — сервер всё равно запускается", err)
 	} else {
 		log.Printf("ClickHouse %s доступен, пользователь %s (источник: %s)",
-			cfg.ClickHouse.URL, user, credSource(cfg.ClickHouse))
+			ch.Addrs(), user, credSource(cfg.ClickHouse))
 	}
 	if *checkCfg {
 		fmt.Println("конфигурация в порядке")

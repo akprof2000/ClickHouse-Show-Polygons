@@ -1,8 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,15 +57,129 @@ type AuthConfig struct {
 	TokenEnv string `yaml:"token_env"`
 }
 
-// CHConfig — куда ходить за данными. Логин и пароль берутся из PAM, если
-// задан pam.secret; иначе из user + password_env.
+// CHConfig — куда ходить за данными. Набор полей и их смысл такие же, как в
+// проекте mrr2h3: сервер задаётся парами host:port, защита соединения —
+// режимом tls, логин и пароль берутся из PAM (если задан pam.secret) либо из
+// user + password_env.
 type CHConfig struct {
-	URL         string    `yaml:"url"`
-	Insecure    bool      `yaml:"insecure"`
-	User        string    `yaml:"user"`
-	PasswordEnv string    `yaml:"password_env"`
-	Timeout     Duration  `yaml:"timeout"`
-	PAM         PAMConfig `yaml:"pam"`
+	// Addr — host:port HTTP-интерфейса ClickHouse (8123 без TLS, 8443 с TLS).
+	// Можно несколько: сервер пробует их по очереди, пока кто-то не ответит.
+	Addr     []string `yaml:"addr"`
+	Database string   `yaml:"database"`
+
+	User        string `yaml:"user"`
+	PasswordEnv string `yaml:"password_env"`
+
+	// TLS — off | on | ca | insecure (как в mrr2h3):
+	//   off      — обычный HTTP;
+	//   on       — HTTPS с системными корневыми сертификатами;
+	//   ca       — HTTPS с доверием сертификатам из ca_cert;
+	//   insecure — HTTPS без проверки сертификата (только стенд).
+	TLS     string   `yaml:"tls"`
+	CACert  []string `yaml:"ca_cert"`
+	TLSCert string   `yaml:"tls_cert"` // взаимный TLS: клиентский сертификат
+	TLSKey  string   `yaml:"tls_key"`
+
+	Timeout Duration  `yaml:"timeout"`
+	PAM     PAMConfig `yaml:"pam"`
+}
+
+// TLSMode — режим защиты соединения с ClickHouse.
+type TLSMode string
+
+const (
+	TLSOff      TLSMode = "off"
+	TLSOn       TLSMode = "on"
+	TLSCustomCA TLSMode = "ca"
+	TLSInsecure TLSMode = "insecure"
+)
+
+// Mode возвращает режим TLS, подставляя off для пустого значения.
+func (c CHConfig) Mode() TLSMode {
+	if strings.TrimSpace(c.TLS) == "" {
+		return TLSOff
+	}
+	return TLSMode(strings.ToLower(strings.TrimSpace(c.TLS)))
+}
+
+// Scheme и DefaultPort: по HTTP-интерфейсу ClickHouse слушает 8123, по
+// HTTPS — 8443. Порт из addr, если он там указан, всегда важнее.
+func (c CHConfig) Scheme() string {
+	if c.Mode() == TLSOff {
+		return "http"
+	}
+	return "https"
+}
+
+func (c CHConfig) defaultPort() string {
+	if c.Mode() == TLSOff {
+		return "8123"
+	}
+	return "8443"
+}
+
+// Endpoints превращает addr в полные адреса запросов.
+func (c CHConfig) Endpoints() []string {
+	out := make([]string, 0, len(c.Addr))
+	for _, a := range c.Addr {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if !strings.Contains(a, ":") {
+			a += ":" + c.defaultPort()
+		}
+		out = append(out, c.Scheme()+"://"+a+"/")
+	}
+	return out
+}
+
+// TLSConfig собирает настройку TLS для выбранного режима (nil без TLS).
+// Логика повторяет mrr2h3, включая проверки на несочетаемые параметры.
+func (c CHConfig) TLSConfig() (*tls.Config, error) {
+	var cfg *tls.Config
+	switch c.Mode() {
+	case TLSOff:
+		if c.TLSCert != "" || c.TLSKey != "" {
+			return nil, fmt.Errorf("clickhouse: клиентский сертификат задан, но tls: off — выберите on|ca|insecure")
+		}
+		return nil, nil
+	case TLSOn:
+		cfg = &tls.Config{}
+	case TLSInsecure:
+		cfg = &tls.Config{InsecureSkipVerify: true}
+	case TLSCustomCA:
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			pool = x509.NewCertPool()
+		}
+		if len(c.CACert) == 0 {
+			return nil, fmt.Errorf("clickhouse: режим tls: ca требует хотя бы один файл в ca_cert")
+		}
+		for _, f := range c.CACert {
+			pem, err := os.ReadFile(f)
+			if err != nil {
+				return nil, fmt.Errorf("clickhouse: чтение корневого сертификата: %w", err)
+			}
+			if !pool.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("clickhouse: в %s нет сертификатов PEM", f)
+			}
+		}
+		cfg = &tls.Config{RootCAs: pool}
+	default:
+		return nil, fmt.Errorf("clickhouse: неизвестный режим tls %q (нужен off|on|ca|insecure)", c.TLS)
+	}
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return nil, fmt.Errorf("clickhouse: для взаимного TLS нужны оба файла — tls_cert и tls_key")
+	}
+	if c.TLSCert != "" {
+		pair, err := tls.LoadX509KeyPair(c.TLSCert, c.TLSKey)
+		if err != nil {
+			return nil, fmt.Errorf("clickhouse: загрузка клиентского сертификата: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+	return cfg, nil
 }
 
 // PAMConfig — запись в PAM (Privileged Access Management) с логином и
@@ -97,9 +212,11 @@ func defaultConfig() Config {
 		DataDir: "./data",
 		Auth:    AuthConfig{TokenEnv: "CHVIEWER_TOKEN"},
 		ClickHouse: CHConfig{
-			URL:     "http://127.0.0.1:8123/",
-			Timeout: Duration(120 * time.Second),
-			PAM:     PAMConfig{TokenEnv: "PAM_TOKEN", Comment: "chviewer", Timeout: Duration(10 * time.Second)},
+			Addr:     []string{"localhost:8123"},
+			Database: "default",
+			TLS:      string(TLSOff),
+			Timeout:  Duration(120 * time.Second),
+			PAM:      PAMConfig{TokenEnv: "PAM_TOKEN", Comment: "chviewer", Timeout: Duration(10 * time.Second)},
 		},
 	}
 }
@@ -133,9 +250,11 @@ func (c *Config) normalize() error {
 	}
 	c.DataDir = abs
 
-	u, err := url.Parse(strings.TrimSpace(c.ClickHouse.URL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return fmt.Errorf("clickhouse.url: нужен http(s)-адрес, получено %q", c.ClickHouse.URL)
+	if len(c.ClickHouse.Endpoints()) == 0 {
+		return fmt.Errorf("clickhouse.addr: укажите хотя бы один адрес host:port")
+	}
+	if _, err := c.ClickHouse.TLSConfig(); err != nil {
+		return err
 	}
 	if c.ClickHouse.Timeout <= 0 {
 		c.ClickHouse.Timeout = Duration(120 * time.Second)
@@ -179,9 +298,11 @@ auth:
   token_env: "CHVIEWER_TOKEN"   # но лучше через переменную окружения
 
 # Куда ходить за полигонами. Браузер этих данных не получает.
+# Набор настроек такой же, как в проекте mrr2h3.
 clickhouse:
-  url: "http://clickhouse.example.com:8123/"
-  insecure: false               # true = не проверять сертификат ClickHouse
+  addr: ["clickhouse.example.com:8123"]  # host:port HTTP-интерфейса (8443 при TLS);
+                                         # можно несколько — пробуются по очереди
+  database: "default"     # база по умолчанию: слои можно писать без префикса "база."
   timeout: 120s
 
   # Первый способ входа: логин здесь, пароль в переменной окружения.
@@ -202,6 +323,16 @@ clickhouse:
     insecure: false             # true = не проверять сертификат PAM (только стенд)
     timeout: 10s                # таймаут одного запроса к PAM
     ttl: 10m                    # сколько держать полученный пароль в памяти
+
+  # Защита соединения с ClickHouse:
+  #   off      — обычный HTTP (порт 8123 по умолчанию);
+  #   on       — HTTPS с системными корневыми сертификатами (8443);
+  #   ca       — HTTPS с доверием сертификатам из ca_cert;
+  #   insecure — HTTPS без проверки сертификата (только стенд).
+  tls: "off"
+  ca_cert: []             # ["/etc/ssl/ch-ca.pem"] для tls: ca
+  tls_cert: ""            # клиентский сертификат (взаимный TLS)
+  tls_key: ""             # ключ клиентского сертификата
 
 # HTTPS самого веб-сервера. Пусто = HTTP (нормально за nginx).
 tls:
