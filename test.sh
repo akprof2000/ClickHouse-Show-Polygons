@@ -69,6 +69,11 @@ clickhouse:
   tls: "off"
   user: "default"
   password_env: "CH_TEST_PASSWORD"
+basemaps:
+  - name: "Внутренний"
+    tiles: ["http://tiles.corp.local:8080/{z}/{x}/{y}.png"]
+  - name: "OpenStreetMap"
+    tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"]
 YAML
 CH_TEST_PASSWORD=test123 "$BIN" -config "$TMP/chviewer.yaml" -check >/dev/null 2>&1
 check "-check проходит с верным паролем" $?
@@ -172,7 +177,22 @@ curl -s -o /dev/null -w '%{http_code}' -X POST -H "Content-Type: application/x-w
   -H "Cookie: $COOKIE" --data-binary '{}' "$APP/api/objects" | grep -q 415
 check "запрос без JSON-заголовка отклонён" $?
 
-echo "=== 12. Ошибочные сценарии ==="
+echo "=== 12. Заголовки страницы ==="
+H=$(curl -s -D - -o /dev/null "$APP/")
+# OpenStreetMap и другие тайл-серверы требуют Referer; без него на проде 403
+echo "$H" | grep -qi '^referrer-policy: strict-origin-when-cross-origin'
+check "Referrer-Policy отдаёт тайл-серверам адрес сайта" $?
+echo "$H" | grep -qi '^referrer-policy: no-referrer'
+check "Referrer-Policy не no-referrer" $((! $?))
+# внутренний тайл-сервер по http должен быть разрешён политикой, иначе
+# браузер молча не загрузит подложку
+echo "$H" | grep -i '^content-security-policy:' | grep -q 'img-src[^;]*http://tiles.corp.local:8080'
+check "CSP пропускает подложку по http из конфигурации (картинки)" $?
+echo "$H" | grep -i '^content-security-policy:' | grep -q 'connect-src[^;]*http://tiles.corp.local:8080'
+check "CSP пропускает подложку по http из конфигурации (запросы)" $?
+api GET /api/info | grep -q 'tiles.corp.local'; check "список подложек отдаётся странице" $?
+
+echo "=== 13. Ошибочные сценарии ==="
 api POST /api/query '{"sql":"SELECT * FROM нет_такой_таблицы"}' | grep -qi 'error'
 check "несуществующая таблица -> ошибка" $?
 api POST /api/objects '{"table":"","geo":"","bbox":[1,2,3,4]}' | grep -qi 'error'

@@ -5,7 +5,7 @@
 [![последний релиз](https://img.shields.io/github/v/release/akprof2000/ClickHouse-Show-Polygons?label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
 [![скачивания](https://img.shields.io/github/downloads/akprof2000/ClickHouse-Show-Polygons/total?label=%D1%81%D0%BA%D0%B0%D1%87%D0%B8%D0%B2%D0%B0%D0%BD%D0%B8%D1%8F)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases)
 [![лицензия MIT](https://img.shields.io/github/license/akprof2000/ClickHouse-Show-Polygons?label=%D0%BB%D0%B8%D1%86%D0%B5%D0%BD%D0%B7%D0%B8%D1%8F)](LICENSE)
-[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-40%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
+[![тесты](https://img.shields.io/badge/%D1%82%D0%B5%D1%81%D1%82%D1%8B-45%20%D0%BF%D1%80%D0%BE%D0%B9%D0%B4%D0%B5%D0%BD%D0%BE-brightgreen)](test.sh)
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Linux](https://img.shields.io/badge/%D0%BF%D0%BB%D0%B0%D1%82%D1%84%D0%BE%D1%80%D0%BC%D0%B0-Linux%20%2F%20CentOS%209-262577?logo=linux&logoColor=white)](https://github.com/akprof2000/ClickHouse-Show-Polygons/releases/latest)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-native%209000%20%2F%209440-FFCC01?logo=clickhouse&logoColor=black)](https://clickhouse.com)
@@ -231,6 +231,19 @@ basemaps:
 
 Проверено на стенде: после перепроецирования ориентиры на Яндексе стоят
 относительно полигонов там же, где на Google и 2ГИС.
+
+### OpenStreetMap на проде: 403
+
+Серверы тайлов OpenStreetMap по своим правилам требуют заголовок `Referer` у
+запросов со страниц. Страница отдаёт его в виде одного адреса сервера — без
+пути и параметров (`Referrer-Policy: strict-origin-when-cross-origin`). До
+версии 3.2.3 стояло `no-referrer`, и на проде, где много пользователей выходят
+в интернет с одного адреса, OSM отвечал 403.
+
+Для серьёзной нагрузки сам OSM просит поднимать свой тайл-сервер или брать
+коммерческого поставщика. Внутренний тайл-сервер подключается строкой в
+`basemaps`, в том числе по обычному `http` — адреса подложек из конфигурации
+сервер сам добавляет в политику безопасности страницы (CSP).
 
 ### Про правила поставщиков
 
@@ -538,7 +551,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o chviewer .
 ├── scripts/launch/serve.sh  # настройка и запуск, создаёт chviewer.yaml
 ├── scripts/systemd/         # юнит для CentOS 9 / RHEL 9
 ├── build.sh                 # сборка фронта + бинарника
-├── test.sh                  # 40 автотестов
+├── test.sh                  # 45 автотестов
 ├── testenv/setup.sql        # тестовые таблицы для стенда
 ├── VERSION                  # версия, вшивается в бинарник
 └── .github/workflows/release.yml   # релиз по тегу или вручную
@@ -608,7 +621,7 @@ docker run -d --name chviewer -p 8081:8081   -e CH_ADDR=host.docker.internal:900
 # сертификат, контейнер ch-test с native 9000 и native+TLS 9440, тестовые данные
 bash testenv/up.sh
 
-# 40 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
+# 45 автотестов: вход по токену, PAM/конфигурация, кэш, bbox, поиск, общие
 # шаблоны, режимы TLS с сертификатами, защита от межсайтовых запросов, ошибки
 bash test.sh
 ```

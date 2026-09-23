@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -43,7 +44,7 @@ func NewServer(cfg Config, ch *chClient, tpl *templateStore, static fs.FS, versi
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	m.Handle("/", staticHeaders(http.FileServer(http.FS(s.static))))
+	m.Handle("/", s.staticHeaders(http.FileServer(http.FS(s.static))))
 
 	m.HandleFunc("/api/info", s.api(s.handleInfo, false))
 	m.HandleFunc("/api/login", s.api(s.handleLogin, false))
@@ -138,17 +139,52 @@ func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, maxRequest)).Decode(v)
 }
 
-// статика: запрещаем угадывание типа и сторонние ресурсы
-func staticHeaders(next http.Handler) http.Handler {
+// статика: запрещаем угадывание типа и лишние сторонние ресурсы
+func (s *Server) staticHeaders(next http.Handler) http.Handler {
+	csp := buildCSP(s.cfg.Basemaps)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Referrer-Policy", "no-referrer")
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data: blob: https:; "+
-				"style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; "+
-				"connect-src 'self' https:; worker-src 'self' blob:; frame-ancestors 'none'")
+		// Не no-referrer: тайл-серверы (OpenStreetMap прямо по своим правилам)
+		// требуют Referer у запросов со страниц и без него отвечают 403 —
+		// на проде за общим NAT это срабатывает сразу. strict-origin-when-
+		// cross-origin отдаёт чужим сайтам только адрес сервера, без пути и
+		// параметров, и ничего не отдаёт при переходе с HTTPS на HTTP.
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Content-Security-Policy", csp)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// buildCSP собирает политику безопасности страницы. Картинки и запросы
+// разрешены на любой https-адрес (подложки по https подключаются без правки
+// политики) и дополнительно — на адреса подложек из конфигурации. Последнее
+// нужно для внутренних тайл-серверов по обычному http: без этого браузер
+// молча не загрузит такую подложку.
+func buildCSP(basemaps []Basemap) string {
+	extra := map[string]bool{}
+	for _, b := range basemaps {
+		for _, t := range b.Tiles {
+			// в шаблоне бывают {z}/{x}/{y} — url.Parse их не любит
+			t = strings.NewReplacer("{z}", "0", "{x}", "0", "{y}", "0", "{s}", "a").Replace(t)
+			u, err := url.Parse(t)
+			if err != nil || u.Host == "" || u.Scheme != "http" {
+				continue // https уже разрешён целиком
+			}
+			extra[u.Scheme+"://"+u.Host] = true
+		}
+	}
+	origins := make([]string, 0, len(extra))
+	for o := range extra {
+		origins = append(origins, o)
+	}
+	sort.Strings(origins)
+	add := ""
+	if len(origins) > 0 {
+		add = " " + strings.Join(origins, " ")
+	}
+	return "default-src 'self'; img-src 'self' data: blob: https:" + add + "; " +
+		"style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; " +
+		"connect-src 'self' https:" + add + "; worker-src 'self' blob:; frame-ancestors 'none'"
 }
 
 // ---------- вход ----------
