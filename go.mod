@@ -3,13 +3,13 @@ module chviewer
 go 1.26.5
 
 require (
-	github.com/akprof2000/pam-client v1.1.0
+	github.com/ClickHouse/clickhouse-go/v2 v2.48.0
+	github.com/akprof2000/pam-client v1.1.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/ClickHouse/ch-go v0.74.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.48.0 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
